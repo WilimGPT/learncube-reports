@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LearnCube Reports</title>
+  <style>
+    :root {
+      font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      font-weight: 400;
+      color-scheme: light dark;
+      background-color: #ffffff;
+      color: #213547;
+    }
+    a { font-weight: 500; color: #646cff; text-decoration: none; }
+    a:hover { color: #535bf2; }
+    body { margin: 0; display: flex; flex-direction: column; min-width: 320px; min-height: 100vh; background: white; }
+    header, footer, main { width: 100%; }
+    h1 { font-size: 2em; margin: 0; }
+
+    button {
+    /* replace your existing button rules with: */
+    padding: 10px 20px;                      /* a bit roomier */
+    border: 2px solid #328ccc;               /* blue border */
+    background-color: white;                 /* white bg */
+    color: #328ccc;                          /* blue text */
+    border-radius: 8px;                      /* same rounding */
+    cursor: pointer;
+    margin: 5px;                             /* match your toggle‑btn spacing */
+    transition: all 0.3s ease-in-out;
+    }
+
+    /* 2) Hover and active states */
+    button:hover {
+    background-color: #365f8c;               /* darker blue */
+    color: white;
+    }
+    button:active,
+    button.active {
+    background-color: #328ccc;               /* original blue */
+    color: white;
+    }
+
+    select {
+    padding: 10px 20px;               /* same padding as buttons */
+    border: 2px solid #328ccc;        /* blue border */
+    background-color: white;          /* white bg */
+    color: #328ccc;                   /* blue text */
+    font-size: 1em;                   /* button‑sized text */
+    border-radius: 8px;               /* same rounding */
+    margin: 5px;                      /* same spacing */
+    cursor: pointer;
+    transition: all 0.3s ease-in-out;
+    /* remove default arrow if you want a custom one:
+        appearance: none;
+        background-image: url(data:image/svg+xml;base64,...);
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+    */
+    }
+
+    select:hover,
+    select:focus {
+    background-color: #365f8c;        /* dark blue on hover/focus */
+    color: white;                     /* invert text */
+    border-color: #365f8c;            /* match hover bg */
+    }
+
+    .hidden { display: none; }
+    .container { max-width: 100%; margin: 0 auto; padding: 2rem; box-sizing: border-box; }
+    .card { background: #fff; padding: 2rem; margin-bottom: 2rem; border-radius: 0.5rem; }
+    .table-container {
+        overflow: auto; max-height: 400px; border: 1px solid #ddd;
+      margin-top: 1rem;
+    }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; }
+
+    /* make the scroll‑container a positioning context */
+    .table-container {
+    position: relative;
+    }
+
+    /* 1) Freeze just the header row at the top */
+    .table-container thead th {
+    position: sticky;
+    top: 0;
+    background: #f0f0f0;  /* match your header bg */
+    z-index: 3;           /* float above everything else */
+    }
+
+    /* 2) Freeze the first column on the left.
+        Note: tbody th are your row‑header cells, td:first-child covers any remaining cells. */
+    .table-container thead th:first-child,
+    .table-container tbody th:first-child,
+    .table-container tbody td:first-child {
+    position: sticky;
+    left: 0;
+    background: white;    /* match your row bg */
+    z-index: 2;           /* just beneath the header row */
+    }
+
+    /* 3) Finally bump the top‑left corner even higher so it overlaps cleanly */
+    .table-container thead th:first-child {
+    z-index: 4;
+    }
+
+    body {
+    background: #f0f2f5;
+    margin: 0;
+    padding: 2rem 0;
+    }
+
+    .page-wrapper {
+    background: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 1280px;
+    margin: 0 auto;
+    }
+
+
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+</head>
+<body>
+ <div class="page-wrapper">
+    <header class="card container" style="display:flex; justify-content:space-between; align-items:center;">
+      <h1>LearnCube Reports</h1>
+      <button id="newUploadBtn">New Upload</button>
+  </header>
+
+  <main class="container">
+    <section id="fileUploadPanel" class="card">
+      <h2>Upload CSV Files</h2>
+      <label>Participants: <input type="file" id="participantsFile" accept=".csv"></label><br><br>
+      <label>Classes: <input type="file" id="classesFile" accept=".csv"></label><br><br>
+      <button id="uploadBtn" disabled>Upload</button>
+    </section>
+
+    <section id="reportSelectorPanel" class="card hidden">
+      <label>Choose a report: <select id="reportSelect">
+        <option value="">-- Select --</option>
+        <option value="teacher_hour_count">Teacher Hour Count</option>
+        <option value="teacher_report">Teacher Report</option>
+        <option value="course_report">Course Report</option>
+        <option value="student_report">Student / Company Report</option>
+      </select></label>
+    </section>
+
+    <section id="teacherHourCountSettings" class="card hidden">
+      <h3>Hour Count Settings</h3>
+      <label>Tardiness Limit (min): <input type="number" id="tardinessLimit" value="5" min="0"></label><br><br>
+      <label><input type="checkbox" id="penaliseTardiness"> Penalise Tardiness</label><br><br>
+      <label>Cancellation Window (hrs): <input type="number" id="cancellationWindow" value="24" min="0"></label><br><br>
+      <label><input type="checkbox" id="payLastMinuteCancellation"> Pay for Late Cancellations</label><br><br>
+      <fieldset>
+        <legend>Class Type Filter</legend>
+        <label><input type="radio" name="classTypeFilter" value="private"> Private</label>
+        <label><input type="radio" name="classTypeFilter" value="group"> Group</label>
+        <label><input type="radio" name="classTypeFilter" value="both" checked> Both</label>
+      </fieldset><br>
+      <button id="generateHourCountBtn">Generate Hour Count Report</button>
+    </section>
+
+    <section id="teacherReportPanel" class="card hidden">
+      <button id="generateTeacherReportBtn">Generate Teacher Report</button>
+    </section>
+
+    <section id="courseReportSettings" class="card hidden">
+      <fieldset>
+        <legend>Course Report Settings</legend>
+        <label><input type="radio" name="courseType" value="overview" checked> Overview</label>
+        <label><input type="radio" name="courseType" value="detail"> Detail</label><br><br>
+        <label id="courseSelectWrapper" class="hidden">Course: <select id="courseSelect"></select></label>
+      </fieldset><br>
+      <button id="generateCourseReportBtn">Generate Course Report</button>
+    </section>
+
+    <section id="studentReportSettings" class="card hidden">
+      <h3>Student Report Settings</h3>
+      <label>Cancellation Window (hrs): <input type="number" id="studentCancellationWindow" value="24" min="0"></label><br><br>
+      <label>Company: <select id="companySelect"><option value="ALL">All</option></select></label><br><br>
+      <button id="generateStudentReportBtn">Generate Student Report</button>
+    </section>
+
+    <!-- Output Sections -->
+    <section id="hourCountReportOutput" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Teacher Hour Count Report</strong>
+        <button id="downloadHourCountBtn">Download CSV</button>
+      </div>
+      <div class="table-container" id="hourCountTable"></div>
+    </section>
+
+    <section id="teacherReportOutput" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Teacher Report</strong>
+        <div>
+          <button id="downloadOverviewBtn">Download Overview CSV</button>
+          <button id="downloadFeedbackBtn">Download Feedback CSV</button>
+        </div>
+      </div>
+      <div class="table-container" id="overviewTable"></div>
+      <div class="table-container" id="feedbackTable"></div>
+    </section>
+
+    <section id="allCoursesOverviewReport" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>All Courses Overview</strong>
+        <button id="downloadAllCoursesBtn">Download CSV</button>
+      </div>
+      <div class="table-container" id="allCoursesTable"></div>
+    </section>
+
+    <section id="courseDetailedReport" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Detailed Course Report</strong>
+        <div>
+          <button id="downloadCourseInfoBtn">Download Course Info CSV</button>
+          <button id="downloadCourseClassListBtn">Download Class List CSV</button>
+        </div>
+      </div>
+      <div class="table-container" id="courseInfoTable"></div>
+      <div class="table-container" id="courseClassListTable"></div>
+    </section>
+
+    <section id="studentReportOutput" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Student Report</strong>
+        <button id="downloadStudentReportBtn">Download CSV</button>
+      </div>
+      <div class="table-container" id="studentReportTable"></div>
+    </section>
+  </main>
+
+
+ </div>
+  <script>
+    // Helpers
+    function parseCSVFile(file) {
+      return new Promise((resolve, reject) => {
+        Papa.parse(file, { skipEmptyLines: true, complete: r => { resolve(r.data.slice(1).filter(r=>r.length>1)); }, error: reject });
+      });
+    }
+    function parseBoolean(v) { return v?.trim().toLowerCase()==='true'; }
+    function timestampDiff(a,b){ if(!a||!b) return 0; return Math.round((new Date(a.replace(' ','T')) - new Date(b.replace(' ','T'))) / 1000); }
+    function clampTardiness(raw,d){ const MIN=-3600, MAX=d; return raw<MIN?MIN:raw>MAX?MAX:raw; }
+    function unique(arr){ return [...new Set(arr)]; }
+
+    // Data processing (from reportProcessing.js)
+    function processData(classesData, participantsData) {
+      const out = {};
+      classesData.forEach(cs => {
+        const slug=cs[6]; if(!slug) return;
+        const cls={ 'scheduled start':cs[0],'scheduled duration':timestampDiff(cs[0],cs[1]), company:cs[5],'course id':cs[29], teacher:{}, students:[] };
+        const parts=participantsData.filter(p=>p[2]===slug);
+        const enrolled=parts.filter(p=>!(p[9]?.trim().toLowerCase()==='true'));
+        cls.students=enrolled.map(pr=>({ username:pr[4], attended:parseBoolean(pr[10]), tardiness:clampTardiness(timestampDiff(pr[3],pr[11]),cls['scheduled duration']), cancelled:parseBoolean(pr[12]), rating:pr[15], feedback:pr[16] }));
+        const teacherRow=parts.find(p=>p[9]?.trim().toLowerCase()==='true');
+        if(teacherRow) cls.teacher={ username:teacherRow[4], attended:parseBoolean(teacherRow[10]), tardiness:clampTardiness(timestampDiff(teacherRow[3],teacherRow[11]),cls['scheduled duration']), cancelled:parseBoolean(teacherRow[12]) };
+        out[slug]=cls;
+      });
+      return out;
+    }
+
+    function buildTeacherHourCountCSV(processedData, settings, simpleReport) {
+  const tardinessLimit = parseFloat(settings.tardinessLimit);
+  const cancellationWindow = parseFloat(settings.cancellationWindow);
+  const penaliseTardiness = settings.penaliseTardiness;
+  const includeCancelled = settings.payLastMinuteCancellation;
+  const classTypeFilter = settings.classTypeFilter;
+  let teacherReports = {};
+  let durationsSet = new Set();
+
+  for (let classSlug in processedData) {
+    const cls = processedData[classSlug];
+    let durationMin = Math.round(parseFloat(cls["scheduled duration"]) / 60);
+    durationsSet.add(durationMin);
+
+    const teacherUsername = cls.teacher.username;
+    if (!teacherUsername) continue;
+    const classType = (parseInt(cls.enrolled) === 1) ? 'private' : 'group';
+    if (classTypeFilter === "private" && classType !== "private") continue;
+    if (classTypeFilter === "group" && classType !== "group") continue;
+    if (!teacherReports[teacherUsername]) teacherReports[teacherUsername] = { durations: {} };
+    if (!teacherReports[teacherUsername].durations[durationMin]) {
+      teacherReports[teacherUsername].durations[durationMin] = {
+        private: { attended: 0, noShow: 0, cancelled: 0, late: 0 },
+        group: { attended: 0, noShow: 0, late: 0 }
+      };
+    }
+
+    const teacherAttended = String(cls.teacher.attended).trim().toLowerCase() === 'true';
+    const teacherTardinessMin = Math.round(parseFloat(cls.teacher.tardiness) / 60);
+    let cancelledCount = 0;
+    if (classType === 'private' && includeCancelled && cls.students && Array.isArray(cls.students)) {
+      for (let student of cls.students) {
+        const studentCancelled = String(student.cancelled).trim().toLowerCase() === 'true';
+        if (studentCancelled && student["cancelled by"] && student["cancelled by"] !== teacherUsername) {
+          const diffSeconds = timestampDiff(cls["scheduled start"], student["cancelled time"]);
+          const diffHours = diffSeconds / 3600;
+          if (diffHours < cancellationWindow) {
+            cancelledCount++;
+            break;
+          }
+        }
+      }
+    }
+    if (teacherAttended) {
+      teacherReports[teacherUsername].durations[durationMin][classType].attended += 1;
+      if (penaliseTardiness && teacherTardinessMin > tardinessLimit) {
+        teacherReports[teacherUsername].durations[durationMin][classType].late += 1;
+      }
+    } else {
+      teacherReports[teacherUsername].durations[durationMin][classType].noShow += 1;
+    }
+    if (classType === 'private' && includeCancelled) {
+      teacherReports[teacherUsername].durations[durationMin][classType].cancelled += cancelledCount;
+    }
+  }
+
+  let durations = Array.from(durationsSet).sort((a, b) => a - b);
+  let header = ["teacher"];
+  if (classTypeFilter === "private") {
+    durations.forEach(duration => {
+      if (simpleReport) {
+        header.push(`${duration}min private classes count`);
+      } else {
+        header.push(`${duration}min private classes attended`);
+        header.push(`${duration}min private classes cancelled < ${cancellationWindow}h`);
+        header.push(`${duration}min private classes no show`);
+        header.push(`${duration}min private classes late`);
+        header.push(`${duration}min private classes count`);
+      }
+    });
+    header.push("Total private classes count");
+    header.push("Total private minutes");
+  } else if (classTypeFilter === "group") {
+    durations.forEach(duration => {
+      if (simpleReport) {
+        header.push(`${duration}min group classes count`);
+      } else {
+        header.push(`${duration}min group classes attended`);
+        header.push(`${duration}min group classes no show`);
+        header.push(`${duration}min group classes late`);
+        header.push(`${duration}min group classes count`);
+      }
+    });
+    header.push("Total group classes count");
+    header.push("Total group minutes");
+  } else {
+    durations.forEach(duration => {
+      if (simpleReport) {
+        header.push(`${duration}min private classes count`);
+        header.push(`${duration}min group classes count`);
+      } else {
+        header.push(`${duration}min private classes attended`);
+        header.push(`${duration}min private classes cancelled < ${cancellationWindow}h`);
+        header.push(`${duration}min private classes no show`);
+        header.push(`${duration}min private classes late`);
+        header.push(`${duration}min private classes count`);
+        header.push(`${duration}min group classes attended`);
+        header.push(`${duration}min group classes no show`);
+        header.push(`${duration}min group classes late`);
+        header.push(`${duration}min group classes count`);
+      }
+    });
+    header.push("Total private classes count");
+    header.push("Total group classes count");
+    header.push("Total private minutes");
+    header.push("Total group minutes");
+  }
+  let rows = [];
+  rows.push(header.join(","));
+  for (let teacher in teacherReports) {
+    let row = [teacher];
+    let totalPrivateCount = 0, totalGroupCount = 0;
+    let totalPrivateMinutes = 0, totalGroupMinutes = 0;
+    if (classTypeFilter === "private") {
+      durations.forEach(duration => {
+        let data = (teacherReports[teacher].durations[duration]) || { private: { attended: 0, noShow: 0, cancelled: 0, late: 0 } };
+        const privateCount = data.private.attended - (penaliseTardiness ? data.private.late : 0) + (includeCancelled ? data.private.cancelled : 0);
+        row.push(simpleReport ? privateCount : data.private.attended);
+        if (!simpleReport) {
+          row.push(data.private.cancelled);
+          row.push(data.private.noShow);
+          row.push(data.private.late);
+          row.push(privateCount);
+        }
+        totalPrivateCount += privateCount;
+        totalPrivateMinutes += privateCount * duration;
+      });
+      row.push(totalPrivateCount);
+      row.push(totalPrivateMinutes);
+    } else if (classTypeFilter === "group") {
+      durations.forEach(duration => {
+        let data = (teacherReports[teacher].durations[duration]) || { group: { attended: 0, noShow: 0, late: 0 } };
+        const groupCount = data.group.attended - (penaliseTardiness ? data.group.late : 0);
+        row.push(simpleReport ? groupCount : data.group.attended);
+        if (!simpleReport) {
+          row.push(data.group.noShow);
+          row.push(data.group.late);
+          row.push(groupCount);
+        }
+        totalGroupCount += groupCount;
+        totalGroupMinutes += groupCount * duration;
+      });
+      row.push(totalGroupCount);
+      row.push(totalGroupMinutes);
+    } else {
+      durations.forEach(duration => {
+        let data = (teacherReports[teacher].durations[duration]) || {
+          private: { attended: 0, noShow: 0, cancelled: 0, late: 0 },
+          group: { attended: 0, noShow: 0, late: 0 }
+        };
+        const privateCount = data.private.attended - (penaliseTardiness ? data.private.late : 0) + (includeCancelled ? data.private.cancelled : 0);
+        const groupCount = data.group.attended - (penaliseTardiness ? data.group.late : 0);
+        if (simpleReport) {
+          row.push(privateCount);
+          row.push(groupCount);
+        } else {
+          row.push(data.private.attended);
+          row.push(data.private.cancelled);
+          row.push(data.private.noShow);
+          row.push(data.private.late);
+          row.push(privateCount);
+          row.push(data.group.attended);
+          row.push(data.group.noShow);
+          row.push(data.group.late);
+          row.push(groupCount);
+        }
+        totalPrivateCount += privateCount;
+        totalGroupCount += groupCount;
+        totalPrivateMinutes += privateCount * duration;
+        totalGroupMinutes += groupCount * duration;
+      });
+      row.push(totalPrivateCount);
+      row.push(totalGroupCount);
+      row.push(totalPrivateMinutes);
+      row.push(totalGroupMinutes);
+    }
+    rows.push(row.join(","));
+  }
+  return rows.join("\n");
+}
+
+// TEACHER OVERVIEW & FEEDBACK
+function buildTeacherOverviewCSV(processedData) {
+  let teachers = {};
+  for (let classSlug in processedData) {
+    let cls = processedData[classSlug];
+    let teacherUsername = cls.teacher.username;
+    if (!teacherUsername) continue;
+    if (!teachers[teacherUsername]) {
+      teachers[teacherUsername] = {
+         totalGroup: 0,
+         totalPrivate: 0,
+         attended: 0,
+         noShow: 0,
+         nonCancelled: 0,
+         cancellationByTeacher: 0,
+         cancellationByStudent: 0,
+         totalTardiness: 0,
+         tardinessCount: 0,
+         ratingSum: 0,
+         ratingCount: 0
+      };
+    }
+    let agg = teachers[teacherUsername];
+    let classType = (parseInt(cls.enrolled) === 1) ? "private" : "group";
+    if (classType === "private") {
+       agg.totalPrivate += 1;
+    } else {
+       agg.totalGroup += 1;
+    }
+    if (!cls.cancelled) {
+      agg.nonCancelled += 1;
+      if (cls.teacher.attended) {
+        agg.attended += 1;
+      } else {
+        agg.noShow += 1;
+      }
+    }
+    if (cls.cancelled && cls["cancelled by"] && cls["cancelled by"].trim() === teacherUsername) {
+      agg.cancellationByTeacher += 1;
+    }
+    if (classType === "private" && cls.cancelled) {
+      let cancelledByStudent = false;
+      for (let student of cls.students) {
+        if (student.cancelled && student["cancelled by"] === student.username) {
+          cancelledByStudent = true;
+          break;
+        }
+      }
+      if (cancelledByStudent) {
+        agg.cancellationByStudent += 1;
+      }
+    }
+    let tardinessMin = Math.round(parseFloat(cls.teacher.tardiness) / 60);
+    agg.totalTardiness += tardinessMin;
+    agg.tardinessCount += 1;
+    for (let student of cls.students) {
+      let rating = parseFloat(student["class rating"]);
+      if (!isNaN(rating)) {
+         agg.ratingSum += rating;
+         agg.ratingCount += 1;
+      }
+    }
+  }
+  let header = ["teacher", "total group classes", "total private classes", "attendance rate", "no show rate", "cancellation by teacher rate", "cancellation by student rate", "average tardiness", "average rating"];
+  let rows = [header.join(",")];
+
+  for (let teacher in teachers) {
+    let agg = teachers[teacher];
+    let attendanceRate = (agg.nonCancelled > 0 ? (agg.attended / agg.nonCancelled).toFixed(2) : "0.00");
+    let noShowRate = (agg.nonCancelled > 0 ? (agg.noShow / agg.nonCancelled).toFixed(2) : "0.00");
+    let cancellationTeacherRate = (agg.nonCancelled > 0 ? (agg.cancellationByTeacher / agg.nonCancelled).toFixed(2) : "0.00");
+    let cancellationStudentRate = (agg.totalPrivate > 0 ? (agg.cancellationByStudent / agg.totalPrivate).toFixed(2) : "0.00");
+    let avgTardiness = (agg.tardinessCount > 0 ? (agg.totalTardiness / agg.tardinessCount).toFixed(2) : "0.00");
+    let avgRating = (agg.ratingCount > 0 ? (agg.ratingSum / agg.ratingCount).toFixed(2) : "0.00");
+    let row = [
+       teacher,
+       agg.totalGroup,
+       agg.totalPrivate,
+       attendanceRate,
+       noShowRate,
+       cancellationTeacherRate,
+       cancellationStudentRate,
+       avgTardiness,
+       avgRating
+    ];
+    rows.push(row.join(","));
+  }
+  return rows.join("\n");
+}
+
+function buildTeacherFeedbackCSV(processedData) {
+  const rows = ["teacher,student,class date,feedback,rating"];
+  for (const classSlug in processedData) {
+    const cls = processedData[classSlug];
+    const teacherUsername = cls.teacher.username;
+    if (!teacherUsername) continue;
+
+    const classDate = cls["scheduled start"];
+    for (const student of cls.students) {
+      // use the actual keys in your objects:
+      const feedback = (student.feedback || "").trim();
+      const rating   = (student.rating   || "").trim();
+
+      // only include rows with real feedback or ratings
+      if (feedback || rating) {
+        // wrap feedback in quotes in case it has commas
+        rows.push([
+          teacherUsername,
+          student.username,
+          classDate,
+          `"${feedback}"`,
+          rating
+        ].join(","));
+      }
+    }
+  }
+  return rows.join("\n");
+}
+
+/* --- Course Reports --- */
+function buildAllCoursesOverviewCSV(processedData) {
+  const byCourse = {};
+  for (const slug in processedData) {
+    const cls = processedData[slug];
+    const courseId = cls['course id'] || 'NO_ID';
+    if (!byCourse[courseId]) byCourse[courseId] = [];
+    byCourse[courseId].push(cls);
+  }
+  const header = [
+    'course ID',
+    'teacher',
+    'start date',
+    'end date',
+    'level',
+    'subject',
+    'course description',
+    'total classes',
+    'seats',
+    'students enrolled (unique)',
+    'attendance rate (%)'
+  ];
+  const rows = [header.join(',')];
+
+  for (const courseId in byCourse) {
+    const classes = byCourse[courseId].sort((a,b) => new Date(a['scheduled start']) - new Date(b['scheduled start']));
+    const firstClass = classes[0];
+    const teachers = unique(classes.map(cls => cls.teacher?.username).filter(Boolean));
+    let allStudentUsernames = [];
+    let attendedCount = 0;
+    let totalStudentParticipations = 0;
+    for (const cls of classes) {
+      if (!Array.isArray(cls.students)) continue;
+      for (const student of cls.students) {
+         allStudentUsernames.push(student.username);
+         totalStudentParticipations++;
+         if (student.attended) attendedCount++;
+      }
+    }
+    const classCount = classes.length;
+    const uniqueStudents = unique(allStudentUsernames);
+    const attendanceRate = totalStudentParticipations ?
+      Math.round((attendedCount / totalStudentParticipations) * 100) : '';
+
+    rows.push([
+      `"${courseId}"`,
+      `"${teachers.join(' - ')}"`,
+      `"${classes[0]['scheduled start']}"`,
+      `"${classes[classes.length-1]['scheduled start']}"`,
+      `"${firstClass.level || ''}"`,
+      `"${firstClass.description || ''}"`,
+      `"${firstClass['course description'] || ''}"`,
+      classCount,
+      `"${firstClass['available seats'] || ''}"`,
+      uniqueStudents.length,
+      attendanceRate
+    ].join(','));
+  }
+  return rows.join('\n');
+}
+
+function buildCourseDetailReport(processedData, courseId) {
+  const classes = Object.values(processedData)
+    .filter(cls => (cls['course id'] || 'NO_ID') === courseId)
+    .sort((a, b) => new Date(a['scheduled start']) - new Date(b['scheduled start']));
+  if (!classes.length) return { infoCsv: '', classListCsv: '', uniqueStudents: [] };
+  const teachers = unique(classes.map(cls => cls.teacher?.username).filter(Boolean));
+  let allStudentUsernames = [], attendedCount = 0, totalStudentParticipations = 0;
+  for (const cls of classes) {
+    if (!Array.isArray(cls.students)) continue;
+    for (const student of cls.students) {
+      allStudentUsernames.push(student.username);
+      totalStudentParticipations++;
+      if (student.attended) attendedCount++;
+    }
+  }
+  const uniqueStudents = unique(allStudentUsernames);
+  const attendanceRate = totalStudentParticipations ? Math.round((attendedCount / totalStudentParticipations) * 100) : '';
+  const firstClass = classes[0];
+  const infoHeader = [
+    'course ID','teacher(s)','start date','end date',
+    'level','subject','course description','seats','students enrolled','total classes','attendance rate (%)'
+  ];
+  const infoRow = [
+    `"${courseId}"`,
+    `"${teachers.join(' - ')}"`,
+    `"${classes[0]['scheduled start']}"`,
+    `"${classes[classes.length-1]['scheduled start']}"`,
+    `"${firstClass.level || ''}"`,
+    `"${firstClass.description || ''}"`,
+    `"${firstClass['course description'] || ''}"`,
+    `"${firstClass['available seats'] || ''}"`,
+    uniqueStudents.length,
+    classes.length,
+    attendanceRate
+  ];
+  const classListHeader = [
+    'class number','date','time','duration','status', ...uniqueStudents.map(u => `"${u}"`)
+  ];
+  const classListRows = [classListHeader.join(',')];
+  classes.forEach((cls, idx) => {
+    const dtObj = new Date(cls['scheduled start']);
+    const date = dtObj.toLocaleDateString();
+    const time = dtObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    const duration = `${Math.floor((cls['scheduled duration'] || 0)/60).toString().padStart(2,'0')}:${((cls['scheduled duration'] || 0)%60).toString().padStart(2,'0')}`;
+    const status = cls.cancelled ? 'cancelled' : 'completed';
+    const rowByStudent = uniqueStudents.map(username => {
+      const stu = Array.isArray(cls.students) ? cls.students.find(s => s.username === username) : undefined;
+      if (!stu) return '';
+      if (stu.cancelled) return 'cancelled';
+      if (stu.attended) return 'attended';
+      return 'no show';
+    });
+    classListRows.push([
+      `Class ${idx+1}`,
+      date,
+      time,
+      duration,
+      status,
+      ...rowByStudent
+    ].join(','));
+  });
+  return {
+    infoCsv: [infoHeader.join(',') , infoRow.join(',')].join('\n'),
+    classListCsv: classListRows.join('\n'),
+    uniqueStudents
+  };
+}
+
+function buildStudentReport(processedData, { cancellationWindow, companyId }) {
+  // companyId: "ALL" or a specific ID
+  // cancellationWindow: hours
+
+  // Gather data per student
+  // We'll use a map: username => {...stats...}
+  let students = {};
+
+  // Used for company/class filtering
+  function classIsInCompany(cls) {
+    return companyId === 'ALL' || String(cls.company) === String(companyId);
+  }
+
+  for (const classSlug in processedData) {
+    const cls = processedData[classSlug];
+    if (!classIsInCompany(cls)) continue;
+    const scheduledStart = cls["scheduled start"];
+    const scheduledStartD = new Date(scheduledStart.replace(' ', 'T'));
+    const classSize = Number(cls.enrolled);
+
+    for (const student of cls.students) {
+      const username = student.username;
+      if (!username) continue;
+      if (!students[username]) {
+        students[username] = {
+          username,
+          company: cls.company,
+          totalGroup: 0,
+          totalPrivate: 0,
+          attended: 0,
+          noShow: 0,
+          cancelled: 0,
+          cancelledLate: 0,
+          cancellationIntervals: [],
+          ratingSum: 0,
+          ratingCount: 0,
+          enrolmentIntervals: [],
+          tardinessSum: 0,
+          tardinessCount: 0,
+          classDates: []
+        };
+      }
+      const s = students[username];
+      if (classSize === 1) { s.totalPrivate++; }
+      else { s.totalGroup++; }
+      s.classDates.push(scheduledStartD);
+
+      // Attendance stats
+      if (student.cancelled) {
+        s.cancelled++;
+        if (student["cancelled time"]) {
+          // Calculate interval in hours
+          const cancelledD = new Date(student["cancelled time"].replace(' ', 'T'));
+          const diffHr = (scheduledStartD - cancelledD) / (1000 * 3600);
+          s.cancellationIntervals.push(diffHr);
+          if (diffHr < cancellationWindow) s.cancelledLate++;
+        }
+      } else if (student.attended) {
+        s.attended++;
+      } else {
+        s.noShow++;
+      }
+
+      // Enrolment interval (enrolled_at to class start)
+      if (student["enrolled at"]) {
+        const dEnr = new Date(student["enrolled at"].replace(' ', 'T'));
+        const diffHr = (scheduledStartD - dEnr) / (1000 * 3600);
+        s.enrolmentIntervals.push(diffHr);
+      }
+
+      // Tardiness
+      if (typeof student.tardiness === 'number') {
+        s.tardinessSum += student.tardiness / 60; // convert to minutes
+        s.tardinessCount++;
+      }
+
+      // Rating
+      const rating = parseFloat(student["class rating"]);
+      if (!isNaN(rating)) {
+        s.ratingSum += rating;
+        s.ratingCount++;
+      }
+    }
+  }
+
+  // Compute average class interval for each student
+  const rows = [
+    [
+      "student",
+      "company",
+      "total group classes",
+      "total private classes",
+      "attendance rate",
+      "no show rate",
+      "cancellation rate",
+      "late cancellation rate",
+      "total cancelled late (not refunded)",
+      "average cancellation interval (hours)",
+      "average tardiness",
+      "average rating",
+      "average enrolment interval (hours)",
+      "average class interval (hours)"
+    ].join(",")
+  ];
+
+  Object.values(students).forEach(s => {
+    const totalClasses = s.totalGroup + s.totalPrivate;
+    const attended = s.attended;
+    const noShow = s.noShow;
+    const cancelled = s.cancelled;
+    const cancelledLate = s.cancelledLate;
+    const total = totalClasses;
+    const attendanceRate = total ? (attended/total).toFixed(2) : "";
+    const noShowRate = total ? (noShow/total).toFixed(2) : "";
+    const cancellationRate = total ? (cancelled/total).toFixed(2) : "";
+    const lateCancellationRate = total ? (cancelledLate/total).toFixed(2) : "";
+    const avgCancellationInterval = s.cancellationIntervals.length ? (s.cancellationIntervals.reduce((a,b)=>a+b,0)/s.cancellationIntervals.length).toFixed(2) : "";
+    const avgTardiness = s.tardinessCount ? (s.tardinessSum/s.tardinessCount).toFixed(2) : "";
+    const avgRating = s.ratingCount ? (s.ratingSum/s.ratingCount).toFixed(2) : "";
+    const avgEnrolInterval = s.enrolmentIntervals.length ? (s.enrolmentIntervals.reduce((a,b)=>a+b,0)/s.enrolmentIntervals.length).toFixed(2) : "";
+
+    // Average class interval
+    let avgClassInterval = "";
+    if (s.classDates.length > 1) {
+      const sortedDates = s.classDates.sort((a, b) => a - b);
+      let sumIntervals = 0;
+      for (let i = 1; i < sortedDates.length; i++) {
+        sumIntervals += (sortedDates[i] - sortedDates[i - 1]) / (1000 * 3600);
+      }
+      avgClassInterval = (sumIntervals / (sortedDates.length - 1)).toFixed(2);
+    }
+
+    rows.push([
+      s.username,
+      s.company,
+      s.totalGroup,
+      s.totalPrivate,
+      attendanceRate,
+      noShowRate,
+      cancellationRate,
+      lateCancellationRate,
+      s.cancelledLate,
+      avgCancellationInterval,
+      avgTardiness,
+      avgRating,
+      avgEnrolInterval,
+      avgClassInterval
+    ].join(","));
+  });
+
+  return rows.join("\n");
+}
+
+    function csvToTable(csv) {
+      const rows=csv.trim().split('\n');
+      let html='<table><thead><tr>'+rows[0].split(',').map(c=>'<th>'+c.replace(/^"|"$/g,'')+'</th>').join('')+'</tr></thead><tbody>';
+      for(let i=1;i<rows.length;i++){ const cols=rows[i].split(','); html+='<tr>'+cols.map((c,j)=>(j===0?'<th>'+c.replace(/^"|"$/g,'')+'</th>':'<td>'+c.replace(/^"|"$/g,'')+'</td>')).join('')+'</tr>'; }
+      return html+'</tbody></table>';
+    }
+  </script>
+
+  <script>
+    // State & UI
+    let data=null, courses=[], companies=[];
+    const panels=['fileUploadPanel','teacherHourCountSettings','teacherReportPanel','courseReportSettings','studentReportSettings','hourCountReportOutput','teacherReportOutput','allCoursesOverviewReport','courseDetailedReport','studentReportOutput'];
+    function show(id){ panels.forEach(p=>document.getElementById(p).classList.add('hidden')); document.getElementById(id).classList.remove('hidden'); }
+
+    // Upload
+    const pIn=document.getElementById('participantsFile'), cIn=document.getElementById('classesFile'), upBtn=document.getElementById('uploadBtn');
+    [pIn,cIn].forEach(i=>i.addEventListener('change',()=>{ upBtn.disabled=!(pIn.files[0]&&cIn.files[0]); }));
+    upBtn.addEventListener('click',async()=>{
+      try{
+        const [cData,pData]=await Promise.all([ parseCSVFile(cIn.files[0]), parseCSVFile(pIn.files[0]) ]);
+        data=processData(cData,pData);
+        courses=unique(Object.values(data).map(c=>c['course id']));
+        companies=unique(Object.values(data).map(c=>c.company).filter(Boolean));
+        document.getElementById('courseSelect').innerHTML=courses.map(id=>`<option>${id}</option>`).join('');
+        document.getElementById('companySelect').innerHTML='<option value="ALL">All</option>'+companies.map(id=>`<option>${id}</option>`).join('');
+        show('reportSelectorPanel');
+      }catch(e){console.error(e);alert('Parsing error');}
+    });
+    document.getElementById('newUploadBtn').addEventListener('click',()=>location.reload());
+
+    // Report select
+    document.getElementById('reportSelect').addEventListener('change',e=>{
+      const v=e.target.value;
+      if(v==='teacher_hour_count') show('teacherHourCountSettings');
+      else if(v==='teacher_report') show('teacherReportPanel');
+      else if(v==='course_report') show('courseReportSettings');
+      else if(v==='student_report') show('studentReportSettings');
+      else show('reportSelectorPanel');
+    });
+
+    // Course type toggle
+    document.querySelectorAll('input[name="courseType"]').forEach(r=>r.addEventListener('change',()=>{
+      document.getElementById('courseSelectWrapper').classList.toggle('hidden', document.querySelector('input[name="courseType"]:checked').value!=='detail');
+    }));
+
+    // Generate handlers
+    document.getElementById('generateHourCountBtn').addEventListener('click',()=>{
+      const s={ tardinessLimit:+document.getElementById('tardinessLimit').value, penaliseTardiness:document.getElementById('penaliseTardiness').checked, cancellationWindow:+document.getElementById('cancellationWindow').value, payLastMinuteCancellation:document.getElementById('payLastMinuteCancellation').checked, classTypeFilter:document.querySelector('input[name="classTypeFilter"]:checked').value };
+      const csv=buildTeacherHourCountCSV(data,s,false);
+      document.getElementById('hourCountTable').innerHTML=csvToTable(csv);
+      document.getElementById('downloadHourCountBtn').onclick=()=>downloadCSV(csv,'teacher-hour-count.csv');
+      show('hourCountReportOutput');
+    });
+
+    document.getElementById('generateTeacherReportBtn').addEventListener('click',()=>{
+      const o=buildTeacherOverviewCSV(data), f=buildTeacherFeedbackCSV(data);
+      document.getElementById('overviewTable').innerHTML=csvToTable(o);
+      document.getElementById('feedbackTable').innerHTML=csvToTable(f);
+      document.getElementById('downloadOverviewBtn').onclick=()=>downloadCSV(o,'overview.csv');
+      document.getElementById('downloadFeedbackBtn').onclick=()=>downloadCSV(f,'feedback.csv');
+      show('teacherReportOutput');
+    });
+
+    document.getElementById('generateCourseReportBtn').addEventListener('click',()=>{
+      if(document.querySelector('input[name="courseType"]:checked').value==='overview'){
+        const c=buildAllCoursesOverviewCSV(data);
+        document.getElementById('allCoursesTable').innerHTML=csvToTable(c);
+        document.getElementById('downloadAllCoursesBtn').onclick=()=>downloadCSV(c,'courses-overview.csv');
+        show('allCoursesOverviewReport');
+      } else {
+        const id=document.getElementById('courseSelect').value;
+        const {infoCsv,classListCsv}=buildCourseDetailReport(data,id);
+        document.getElementById('courseInfoTable').innerHTML=csvToTable(infoCsv);
+        document.getElementById('courseClassListTable').innerHTML=csvToTable(classListCsv);
+        document.getElementById('downloadCourseInfoBtn').onclick=()=>downloadCSV(infoCsv,'course-info.csv');
+        document.getElementById('downloadCourseClassListBtn').onclick=()=>downloadCSV(classListCsv,'course-class.csv');
+        show('courseDetailedReport');
+      }
+    });
+
+    document.getElementById('generateStudentReportBtn').addEventListener('click',()=>{
+      const s={ cancellationWindow:+document.getElementById('studentCancellationWindow').value, companyId:document.getElementById('companySelect').value };
+      const csv=buildStudentReport(data,s);
+      document.getElementById('studentReportTable').innerHTML=csvToTable(csv);
+      document.getElementById('downloadStudentReportBtn').onclick=()=>downloadCSV(csv,'student-report.csv');
+      show('studentReportOutput');
+    });
+
+    function downloadCSV(csv,fn){ const b=new Blob([csv],{type:'text/csv'}), u=URL.createObjectURL(b), a=document.createElement('a'); a.href=u; a.download=fn; a.click(); URL.revokeObjectURL(u); }
+  </script>
+</body>
+</html>
