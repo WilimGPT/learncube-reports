@@ -162,6 +162,11 @@
         <label><input type="radio" name="classTypeFilter" value="group"> Group</label>
         <label><input type="radio" name="classTypeFilter" value="both" checked> Both</label>
       </fieldset><br>
+      <fieldset id="durationFilterFieldset">
+        <legend>Include these scheduled durations</legend>
+        <div id="durationFilterContainer">
+        </div>
+      </fieldset><br>
       <button id="generateHourCountBtn">Generate Hour Count Report</button>
     </section>
 
@@ -246,7 +251,14 @@
       });
     }
     function parseBoolean(v) { return v?.trim().toLowerCase()==='true'; }
-    function timestampDiff(a,b){ if(!a||!b) return 0; return Math.round((new Date(a.replace(' ','T')) - new Date(b.replace(' ','T'))) / 1000); }
+    function timestampDiff(a, b) {
+        if (!a || !b) return 0;
+        // swap the subtraction so you get b - a (in seconds)
+        return Math.round(
+            (new Date(b.replace(' ', 'T')) - new Date(a.replace(' ', 'T')))
+            / 1000
+     );
+    }
     function clampTardiness(raw,d){ const MIN=-3600, MAX=d; return raw<MIN?MIN:raw>MAX?MAX:raw; }
     function unique(arr){ return [...new Set(arr)]; }
 
@@ -255,7 +267,7 @@
       const out = {};
       classesData.forEach(cs => {
         const slug=cs[6]; if(!slug) return;
-        const cls={ 'scheduled start':cs[0],'scheduled duration':timestampDiff(cs[0],cs[1]), company:cs[5],'course id':cs[29], teacher:{}, students:[] };
+        const cls={ 'scheduled start':cs[0],'scheduled duration':timestampDiff(cs[0],cs[1]), company:cs[5],'course id':cs[29], 'available seats': parseInt(cs[10], 10), teacher:{}, students:[] };
         const parts=participantsData.filter(p=>p[2]===slug);
         const enrolled=parts.filter(p=>!(p[9]?.trim().toLowerCase()==='true'));
         cls.students=enrolled.map(pr=>({ username:pr[4], attended:parseBoolean(pr[10]), tardiness:clampTardiness(timestampDiff(pr[3],pr[11]),cls['scheduled duration']), cancelled:parseBoolean(pr[12]), rating:pr[15], feedback:pr[16] }));
@@ -282,7 +294,7 @@
 
     const teacherUsername = cls.teacher.username;
     if (!teacherUsername) continue;
-    const classType = (parseInt(cls.enrolled) === 1) ? 'private' : 'group';
+    const classType = (cls['available seats'] === 1) ? 'private' : 'group';
     if (classTypeFilter === "private" && classType !== "private") continue;
     if (classTypeFilter === "group" && classType !== "group") continue;
     if (!teacherReports[teacherUsername]) teacherReports[teacherUsername] = { durations: {} };
@@ -470,7 +482,7 @@ function buildTeacherOverviewCSV(processedData) {
       };
     }
     let agg = teachers[teacherUsername];
-    let classType = (parseInt(cls.enrolled) === 1) ? "private" : "group";
+    let classType = (cls['available seats'] === 1) ? "private" : "group";
     if (classType === "private") {
        agg.totalPrivate += 1;
     } else {
@@ -503,7 +515,7 @@ function buildTeacherOverviewCSV(processedData) {
     agg.totalTardiness += tardinessMin;
     agg.tardinessCount += 1;
     for (let student of cls.students) {
-      let rating = parseFloat(student["class rating"]);
+      let rating = parseFloat(student.rating);
       if (!isNaN(rating)) {
          agg.ratingSum += rating;
          agg.ratingCount += 1;
@@ -713,7 +725,7 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
     if (!classIsInCompany(cls)) continue;
     const scheduledStart = cls["scheduled start"];
     const scheduledStartD = new Date(scheduledStart.replace(' ', 'T'));
-    const classSize = Number(cls.enrolled);
+    const seats = cls['available seats'];
 
     for (const student of cls.students) {
       const username = student.username;
@@ -738,7 +750,7 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         };
       }
       const s = students[username];
-      if (classSize === 1) { s.totalPrivate++; }
+      if (seats === 1) { s.totalPrivate++; }
       else { s.totalGroup++; }
       s.classDates.push(scheduledStartD);
 
@@ -772,7 +784,7 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
       }
 
       // Rating
-      const rating = parseFloat(student["class rating"]);
+      const rating = parseFloat(student.rating);
       if (!isNaN(rating)) {
         s.ratingSum += rating;
         s.ratingCount++;
@@ -873,6 +885,23 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         companies=unique(Object.values(data).map(c=>c.company).filter(Boolean));
         document.getElementById('courseSelect').innerHTML=courses.map(id=>`<option>${id}</option>`).join('');
         document.getElementById('companySelect').innerHTML='<option value="ALL">All</option>'+companies.map(id=>`<option>${id}</option>`).join('');
+        // --- populate duration checkboxes ---
+        const durations = [...new Set(
+        Object.values(data)
+                .map(c => Math.round(c['scheduled duration'] / 60))
+        )].sort((a, b) => a - b);
+
+        const durContainer = document.getElementById('durationFilterContainer');
+        durContainer.innerHTML = durations
+        .map(d => {
+            const isChecked = (d === 30 || d === 60) ? 'checked' : '';
+            return `
+            <label style="margin-right:1rem;">
+                <input type="checkbox" name="durationFilter" value="${d}" ${isChecked}>
+                ${d} min
+            </label>
+            `;
+        }).join('');
         show('reportSelectorPanel');
       }catch(e){console.error(e);alert('Parsing error');}
     });
@@ -894,12 +923,36 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
     }));
 
     // Generate handlers
-    document.getElementById('generateHourCountBtn').addEventListener('click',()=>{
-      const s={ tardinessLimit:+document.getElementById('tardinessLimit').value, penaliseTardiness:document.getElementById('penaliseTardiness').checked, cancellationWindow:+document.getElementById('cancellationWindow').value, payLastMinuteCancellation:document.getElementById('payLastMinuteCancellation').checked, classTypeFilter:document.querySelector('input[name="classTypeFilter"]:checked').value };
-      const csv=buildTeacherHourCountCSV(data,s,false);
-      document.getElementById('hourCountTable').innerHTML=csvToTable(csv);
-      document.getElementById('downloadHourCountBtn').onclick=()=>downloadCSV(csv,'teacher-hour-count.csv');
-      show('hourCountReportOutput');
+    document.getElementById('generateHourCountBtn').addEventListener('click', ()=>{
+        // 1) gather settings
+        const s = {
+            tardinessLimit:+document.getElementById('tardinessLimit').value,
+            penaliseTardiness:document.getElementById('penaliseTardiness').checked,
+            cancellationWindow:+document.getElementById('cancellationWindow').value,
+            payLastMinuteCancellation:document.getElementById('payLastMinuteCancellation').checked,
+            classTypeFilter:document.querySelector('input[name="classTypeFilter"]:checked').value
+        };
+
+        // 2) get checked durations
+        const selectedDurations = Array.from(
+            document.querySelectorAll('input[name="durationFilter"]:checked')
+        ).map(el => parseInt(el.value, 10));
+
+        // 3) filter your data
+        const filteredData = Object.fromEntries(
+            Object.entries(data)
+                .filter(([slug, cls]) => selectedDurations
+                    .includes(Math.round(cls['scheduled duration'] / 60))
+                )
+        );
+
+        // 4) build table & CSV download
+        const csv = buildTeacherHourCountCSV(filteredData, s, false);
+        document.getElementById('hourCountTable').innerHTML = csvToTable(csv);
+        document.getElementById('downloadHourCountBtn').onclick =
+            () => downloadCSV(csv,'teacher-hour-count.csv');
+
+        show('hourCountReportOutput');
     });
 
     document.getElementById('generateTeacherReportBtn').addEventListener('click',()=>{
