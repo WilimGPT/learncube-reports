@@ -156,6 +156,14 @@
       <label><input type="checkbox" id="penaliseTardiness"> Penalise Tardiness</label><br><br>
       <label>Cancellation Window (hrs): <input type="number" id="cancellationWindow" value="24" min="0"></label><br><br>
       <label><input type="checkbox" id="payLastMinuteCancellation"> Pay for Late Cancellations</label><br><br>
+    
+      <!-- NEW SETTINGS FOR STUDENT NO-SHOW PAYMENT -->
+      <label><input type="checkbox" id="payStudentNoShow" checked> Teachers are paid for student no-shows</label><br><br>
+      <label>Pay rate for student no-shows (%): 
+        <input type="number" id="studentNoShowRate" value="100" min="0" max="100">
+      </label><br><br>
+      <!-- END NEW SETTINGS -->
+    
       <fieldset>
         <legend>Class Type Filter</legend>
         <label><input type="radio" name="classTypeFilter" value="private"> Private</label>
@@ -164,11 +172,11 @@
       </fieldset><br>
       <fieldset id="durationFilterFieldset">
         <legend>Include these scheduled durations</legend>
-        <div id="durationFilterContainer">
-        </div>
+        <div id="durationFilterContainer"></div>
       </fieldset><br>
       <button id="generateHourCountBtn">Generate Hour Count Report</button>
     </section>
+    
 
     <section id="teacherReportPanel" class="card hidden">
       <button id="generateTeacherReportBtn">Generate Teacher Report</button>
@@ -195,7 +203,10 @@
     <section id="hourCountReportOutput" class="card hidden">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <strong>Teacher Hour Count Report</strong>
-        <button id="downloadHourCountBtn">Download CSV</button>
+        <div>
+          <button id="downloadHourCountBtn">Download CSV</button>
+          <button id="downloadSimplifiedHourCountBtn">Download Simplified CSV</button>
+        </div>
       </div>
       <div class="table-container" id="hourCountTable"></div>
     </section>
@@ -279,185 +290,165 @@
     }
 
     function buildTeacherHourCountCSV(processedData, settings, simpleReport) {
-  const tardinessLimit = parseFloat(settings.tardinessLimit);
-  const cancellationWindow = parseFloat(settings.cancellationWindow);
-  const penaliseTardiness = settings.penaliseTardiness;
-  const includeCancelled = settings.payLastMinuteCancellation;
-  const classTypeFilter = settings.classTypeFilter;
-  let teacherReports = {};
-  let durationsSet = new Set();
+      const {
+        tardinessLimit,
+        cancellationWindow,
+        penaliseTardiness,
+        payLastMinuteCancellation,
+        payStudentNoShow,
+        studentNoShowRate,     // percent
+        classTypeFilter
+      } = settings;
 
-  for (let classSlug in processedData) {
-    const cls = processedData[classSlug];
-    let durationMin = Math.round(parseFloat(cls["scheduled duration"]) / 60);
-    durationsSet.add(durationMin);
+      const studentNoShowFrac = (payStudentNoShow ? (studentNoShowRate / 100) : 0);
+      let teacherReports = {}, durationsSet = new Set();
 
-    const teacherUsername = cls.teacher.username;
-    if (!teacherUsername) continue;
-    const classType = (cls['available seats'] === 1) ? 'private' : 'group';
-    if (classTypeFilter === "private" && classType !== "private") continue;
-    if (classTypeFilter === "group" && classType !== "group") continue;
-    if (!teacherReports[teacherUsername]) teacherReports[teacherUsername] = { durations: {} };
-    if (!teacherReports[teacherUsername].durations[durationMin]) {
-      teacherReports[teacherUsername].durations[durationMin] = {
-        private: { attended: 0, noShow: 0, cancelled: 0, late: 0 },
-        group: { attended: 0, noShow: 0, late: 0 }
-      };
-    }
+      // 1) aggregate per-class data
+      for (let slug in processedData) {
+        const cls = processedData[slug];
+        const durMin = Math.round(cls['scheduled duration'] / 60);
+        durationsSet.add(durMin);
 
-    const teacherAttended = String(cls.teacher.attended).trim().toLowerCase() === 'true';
-    const teacherTardinessMin = Math.round(parseFloat(cls.teacher.tardiness) / 60);
-    let cancelledCount = 0;
-    if (classType === 'private' && includeCancelled && cls.students && Array.isArray(cls.students)) {
-      for (let student of cls.students) {
-        const studentCancelled = String(student.cancelled).trim().toLowerCase() === 'true';
-        if (studentCancelled && student["cancelled by"] && student["cancelled by"] !== teacherUsername) {
-          const diffSeconds = timestampDiff(cls["scheduled start"], student["cancelled time"]);
-          const diffHours = diffSeconds / 3600;
-          if (diffHours < cancellationWindow) {
-            cancelledCount++;
-            break;
+        const t = cls.teacher.username;
+        if (!t) continue;
+        const type = (cls['available seats'] === 1) ? 'private' : 'group';
+        if (classTypeFilter !== 'both' && classTypeFilter !== type) continue;
+
+        // init buckets
+        teacherReports[t] = teacherReports[t] || { durations: {} };
+        const durs = teacherReports[t].durations;
+        if (!durs[durMin]) {
+          durs[durMin] = {
+            private: { attended: 0, noShow: 0, cancelled: 0, late: 0, studentNoShow: 0 },
+            group:   { attended: 0, noShow: 0,               late: 0, studentNoShow: 0 }
+          };
+        }
+        const bucket = durs[durMin][type];
+
+        // flags
+        const teacherAttended  = Boolean(cls.teacher.attended);
+        const teacherCancelled = Boolean(cls.teacher.cancelled);
+        const tLateMin         = Math.round(cls.teacher.tardiness / 60);
+
+        // count late student cancellations (private only)
+        if (type === 'private' && payLastMinuteCancellation && Array.isArray(cls.students)) {
+          for (let s of cls.students) {
+            if (s.cancelled && s['cancelled by'] !== t) {
+              if (timestampDiff(cls['scheduled start'], s['cancelled time']) / 3600 < cancellationWindow) {
+                bucket.cancelled++;
+                break;
+              }
+            }
           }
         }
-      }
-    }
-    if (teacherAttended) {
-      teacherReports[teacherUsername].durations[durationMin][classType].attended += 1;
-      if (penaliseTardiness && teacherTardinessMin > tardinessLimit) {
-        teacherReports[teacherUsername].durations[durationMin][classType].late += 1;
-      }
-    } else {
-      teacherReports[teacherUsername].durations[durationMin][classType].noShow += 1;
-    }
-    if (classType === 'private' && includeCancelled) {
-      teacherReports[teacherUsername].durations[durationMin][classType].cancelled += cancelledCount;
-    }
-  }
 
-  let durations = Array.from(durationsSet).sort((a, b) => a - b);
-  let header = ["teacher"];
-  if (classTypeFilter === "private") {
-    durations.forEach(duration => {
-      if (simpleReport) {
-        header.push(`${duration}min private classes count`);
-      } else {
-        header.push(`${duration}min private classes attended`);
-        header.push(`${duration}min private classes cancelled < ${cancellationWindow}h`);
-        header.push(`${duration}min private classes no show`);
-        header.push(`${duration}min private classes late`);
-        header.push(`${duration}min private classes count`);
-      }
-    });
-    header.push("Total private classes count");
-    header.push("Total private minutes");
-  } else if (classTypeFilter === "group") {
-    durations.forEach(duration => {
-      if (simpleReport) {
-        header.push(`${duration}min group classes count`);
-      } else {
-        header.push(`${duration}min group classes attended`);
-        header.push(`${duration}min group classes no show`);
-        header.push(`${duration}min group classes late`);
-        header.push(`${duration}min group classes count`);
-      }
-    });
-    header.push("Total group classes count");
-    header.push("Total group minutes");
-  } else {
-    durations.forEach(duration => {
-      if (simpleReport) {
-        header.push(`${duration}min private classes count`);
-        header.push(`${duration}min group classes count`);
-      } else {
-        header.push(`${duration}min private classes attended`);
-        header.push(`${duration}min private classes cancelled < ${cancellationWindow}h`);
-        header.push(`${duration}min private classes no show`);
-        header.push(`${duration}min private classes late`);
-        header.push(`${duration}min private classes count`);
-        header.push(`${duration}min group classes attended`);
-        header.push(`${duration}min group classes no show`);
-        header.push(`${duration}min group classes late`);
-        header.push(`${duration}min group classes count`);
-      }
-    });
-    header.push("Total private classes count");
-    header.push("Total group classes count");
-    header.push("Total private minutes");
-    header.push("Total group minutes");
-  }
-  let rows = [];
-  rows.push(header.join(","));
-  for (let teacher in teacherReports) {
-    let row = [teacher];
-    let totalPrivateCount = 0, totalGroupCount = 0;
-    let totalPrivateMinutes = 0, totalGroupMinutes = 0;
-    if (classTypeFilter === "private") {
-      durations.forEach(duration => {
-        let data = (teacherReports[teacher].durations[duration]) || { private: { attended: 0, noShow: 0, cancelled: 0, late: 0 } };
-        const privateCount = data.private.attended - (penaliseTardiness ? data.private.late : 0) + (includeCancelled ? data.private.cancelled : 0);
-        row.push(simpleReport ? privateCount : data.private.attended);
-        if (!simpleReport) {
-          row.push(data.private.cancelled);
-          row.push(data.private.noShow);
-          row.push(data.private.late);
-          row.push(privateCount);
-        }
-        totalPrivateCount += privateCount;
-        totalPrivateMinutes += privateCount * duration;
-      });
-      row.push(totalPrivateCount);
-      row.push(totalPrivateMinutes);
-    } else if (classTypeFilter === "group") {
-      durations.forEach(duration => {
-        let data = (teacherReports[teacher].durations[duration]) || { group: { attended: 0, noShow: 0, late: 0 } };
-        const groupCount = data.group.attended - (penaliseTardiness ? data.group.late : 0);
-        row.push(simpleReport ? groupCount : data.group.attended);
-        if (!simpleReport) {
-          row.push(data.group.noShow);
-          row.push(data.group.late);
-          row.push(groupCount);
-        }
-        totalGroupCount += groupCount;
-        totalGroupMinutes += groupCount * duration;
-      });
-      row.push(totalGroupCount);
-      row.push(totalGroupMinutes);
-    } else {
-      durations.forEach(duration => {
-        let data = (teacherReports[teacher].durations[duration]) || {
-          private: { attended: 0, noShow: 0, cancelled: 0, late: 0 },
-          group: { attended: 0, noShow: 0, late: 0 }
-        };
-        const privateCount = data.private.attended - (penaliseTardiness ? data.private.late : 0) + (includeCancelled ? data.private.cancelled : 0);
-        const groupCount = data.group.attended - (penaliseTardiness ? data.group.late : 0);
-        if (simpleReport) {
-          row.push(privateCount);
-          row.push(groupCount);
+        // 1a) teacher attended vs no-show vs late
+        if (teacherAttended) {
+          bucket.attended++;
+          if (penaliseTardiness && tLateMin > tardinessLimit) bucket.late++;
         } else {
-          row.push(data.private.attended);
-          row.push(data.private.cancelled);
-          row.push(data.private.noShow);
-          row.push(data.private.late);
-          row.push(privateCount);
-          row.push(data.group.attended);
-          row.push(data.group.noShow);
-          row.push(data.group.late);
-          row.push(groupCount);
+          bucket.noShow++;
         }
-        totalPrivateCount += privateCount;
-        totalGroupCount += groupCount;
-        totalPrivateMinutes += privateCount * duration;
-        totalGroupMinutes += groupCount * duration;
-      });
-      row.push(totalPrivateCount);
-      row.push(totalGroupCount);
-      row.push(totalPrivateMinutes);
-      row.push(totalGroupMinutes);
+
+        // 1b) student no-show = teacher attended, teacher not cancelled, AND no students attended
+        if (
+          teacherAttended &&
+          !teacherCancelled &&
+          Array.isArray(cls.students) &&
+          cls.students.length > 0 &&
+          cls.students.every(s => !s.attended)
+        ) {
+          bucket.studentNoShow++;
+        }
+      }
+
+      // 2) build header row
+      const durations = Array.from(durationsSet).sort((a, b) => a - b);
+      const header = ['teacher'];
+      const makeCols = (type) => {
+        durations.forEach(d => {
+          if (simpleReport) {
+            header.push(`${d}min ${type} classes count`);
+          } else {
+            header.push(`${d}min ${type} classes attended`);
+            if (type === 'private') header.push(`${d}min ${type} classes cancelled < ${cancellationWindow}h`);
+            header.push(`${d}min ${type} classes no show`);
+            header.push(`${d}min ${type} student no show`);
+            header.push(`${d}min ${type} classes late`);
+            header.push(`${d}min ${type} classes count`);
+          }
+        });
+        header.push(`Total ${type} classes count`);
+        header.push(`Total ${type} minutes`);
+      };
+      if (classTypeFilter === 'both') {
+        makeCols('private');
+        makeCols('group');
+      } else {
+        makeCols(classTypeFilter);
+      }
+
+      // 3) build data rows
+      const rows = [ header.join(',') ];
+      for (let teacher in teacherReports) {
+        const durs = teacherReports[teacher].durations;
+        let row = [teacher];
+        let totalPrivCount = 0, totalGrpCount = 0;
+        let totalPrivMin   = 0, totalGrpMin   = 0;
+
+        const pushType = (type) => {
+          durations.forEach(d => {
+            const b = (durs[d] && durs[d][type]) || { attended:0, cancelled:0, noShow:0, late:0, studentNoShow:0 };
+            // base count before deduction
+            const baseCount = b.attended
+              - (penaliseTardiness ? b.late : 0)
+              + ((type==='private' && payLastMinuteCancellation) ? b.cancelled : 0);
+
+            // deduction for student no-shows
+            const deduction = b.studentNoShow * (1 - studentNoShowFrac);
+            const netCount  = parseFloat((baseCount - deduction).toFixed(2));
+
+            if (simpleReport) {
+              row.push(netCount);
+            } else {
+              row.push(b.attended);
+              if (type==='private') row.push(b.cancelled);
+              row.push(b.noShow);
+              row.push(b.studentNoShow);
+              row.push(b.late);
+              row.push(netCount);
+            }
+
+            if (type === 'private') {
+              totalPrivCount += netCount;
+              totalPrivMin   += netCount * d;
+            } else {
+              totalGrpCount += netCount;
+              totalGrpMin   += netCount * d;
+            }
+          });
+          // totals
+          if (type === 'private') {
+            row.push(totalPrivCount, totalPrivMin);
+          } else {
+            row.push(totalGrpCount, totalGrpMin);
+          }
+        };
+
+        if (classTypeFilter === 'both') {
+          pushType('private');
+          pushType('group');
+        } else {
+          pushType(classTypeFilter);
+        }
+
+        rows.push(row.join(','));
+      }
+
+      return rows.join('\n');
     }
-    rows.push(row.join(","));
-  }
-  return rows.join("\n");
-}
+
+
 
 // TEACHER OVERVIEW & FEEDBACK
 function buildTeacherOverviewCSV(processedData) {
@@ -923,37 +914,49 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
     }));
 
     // Generate handlers
-    document.getElementById('generateHourCountBtn').addEventListener('click', ()=>{
-        // 1) gather settings
-        const s = {
-            tardinessLimit:+document.getElementById('tardinessLimit').value,
-            penaliseTardiness:document.getElementById('penaliseTardiness').checked,
-            cancellationWindow:+document.getElementById('cancellationWindow').value,
-            payLastMinuteCancellation:document.getElementById('payLastMinuteCancellation').checked,
-            classTypeFilter:document.querySelector('input[name="classTypeFilter"]:checked').value
-        };
+    document.getElementById('generateHourCountBtn').addEventListener('click', () => {
+      // 1) gather settings, now including student-no-show payment
+      const s = {
+        tardinessLimit: +document.getElementById('tardinessLimit').value,
+        penaliseTardiness: document.getElementById('penaliseTardiness').checked,
+        cancellationWindow: +document.getElementById('cancellationWindow').value,
+        payLastMinuteCancellation: document.getElementById('payLastMinuteCancellation').checked,
+        payStudentNoShow: document.getElementById('payStudentNoShow').checked,
+        studentNoShowRate: +document.getElementById('studentNoShowRate').value,  // percent
+        classTypeFilter: document.querySelector('input[name="classTypeFilter"]:checked').value
+      };
 
-        // 2) get checked durations
-        const selectedDurations = Array.from(
-            document.querySelectorAll('input[name="durationFilter"]:checked')
-        ).map(el => parseInt(el.value, 10));
+      // 2) get checked durations
+      const selectedDurations = Array.from(
+        document.querySelectorAll('input[name="durationFilter"]:checked')
+      ).map(el => parseInt(el.value, 10));
 
-        // 3) filter your data
-        const filteredData = Object.fromEntries(
-            Object.entries(data)
-                .filter(([slug, cls]) => selectedDurations
-                    .includes(Math.round(cls['scheduled duration'] / 60))
-                )
-        );
+      // 3) filter your data
+      const filteredData = Object.fromEntries(
+        Object.entries(data)
+          .filter(([slug, cls]) =>
+            selectedDurations.includes(Math.round(cls['scheduled duration'] / 60))
+          )
+      );
 
-        // 4) build table & CSV download
-        const csv = buildTeacherHourCountCSV(filteredData, s, false);
-        document.getElementById('hourCountTable').innerHTML = csvToTable(csv);
-        document.getElementById('downloadHourCountBtn').onclick =
-            () => downloadCSV(csv,'teacher-hour-count.csv');
+      // 4) build both detailed and simplified CSVs
+      const detailedCsv   = buildTeacherHourCountCSV(filteredData, s, false);
+      const simplifiedCsv = buildTeacherHourCountCSV(filteredData, s, true);
 
-        show('hourCountReportOutput');
+      // 5) render the detailed table on-page
+      document.getElementById('hourCountTable').innerHTML = csvToTable(detailedCsv);
+
+      // 6) hook up both download buttons
+      document.getElementById('downloadHourCountBtn').onclick = () =>
+        downloadCSV(detailedCsv,   'teacher-hour-count.csv');
+      document.getElementById('downloadSimplifiedHourCountBtn').onclick = () =>
+        downloadCSV(simplifiedCsv, 'teacher-hour-count-simple.csv');
+
+      // 7) show the report panel
+      show('hourCountReportOutput');
     });
+
+
 
     document.getElementById('generateTeacherReportBtn').addEventListener('click',()=>{
       const o=buildTeacherOverviewCSV(data), f=buildTeacherFeedbackCSV(data);
