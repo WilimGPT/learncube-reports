@@ -149,6 +149,7 @@
         <option value="course_report">Course Report</option>
         <option value="student_report">Student / Company Report</option>
       </select></label>
+      <button id="downloadJsonBtn">Download JSON</button>
     </section>
 
     <section id="teacherHourCountSettings" class="card hidden">
@@ -273,6 +274,14 @@
         <button id="downloadPrivateOverviewBtn">Download CSV</button>
       </div>
       <div class="table-container" id="privateOverviewTable"></div>
+
+      <hr style="margin:2rem 0;">
+      <div style="margin-bottom:1rem;">
+        <strong>Private Class Summary Averages</strong>
+      </div>
+      <div class="table-container" id="privateAveragesTable"></div>
+
+
     </section>
 
 
@@ -299,22 +308,92 @@
     function clampTardiness(raw,d){ const MIN=-3600, MAX=d; return raw<MIN?MIN:raw>MAX?MAX:raw; }
     function unique(arr){ return [...new Set(arr)]; }
 
-    // Data processing (from reportProcessing.js)
+    // Data processing
     function processData(classesData, participantsData) {
       const out = {};
       classesData.forEach(cs => {
-        const slug=cs[6]; if(!slug) return;
-        const cls={ 'scheduled start':cs[0],'scheduled duration':timestampDiff(cs[0],cs[1]), company:cs[5],'course id':cs[29], 'available seats': parseInt(cs[10], 10), cancelledBy: cs[22] || '', cancelledTime: cs[23] || '', teacher:{}, students:[] };
-        const parts=participantsData.filter(p=>p[2]===slug);
-        const enrolled=parts.filter(p=>!(p[9]?.trim().toLowerCase()==='true'));
-        cls.students=enrolled.map(pr=>({ username:pr[4], attended:parseBoolean(pr[10]), tardiness:clampTardiness(timestampDiff(pr[3],pr[11]),cls['scheduled duration']), cancelled:parseBoolean(pr[12]), cancelledBy:   pr[13] || '', cancelledTime: pr[14], rating:pr[15], feedback:pr[16] }));
-        const teacherRow=parts.find(p=>p[9]?.trim().toLowerCase()==='true');
-        if(teacherRow) cls.teacher={ username:teacherRow[4], attended:parseBoolean(teacherRow[10]), tardiness:clampTardiness(timestampDiff(teacherRow[3],teacherRow[11]),cls['scheduled duration']), cancelled:parseBoolean(teacherRow[12]) };
-        cls.cancelledByStudent = Boolean(cls.cancelledBy && cls.students.some(s => s.username === cls.cancelledBy));
-        out[slug]=cls;
+        const slug = cs[6];
+        if (!slug) return;
+
+        const scheduledStart = cs[0];
+        const scheduledDuration = timestampDiff(cs[0], cs[1]); // in seconds
+        const cancelledBy = cs[22] || '';
+        const cancelledTime = cs[23] || '';
+
+        const cls = {
+          scheduledStart,                      // CLASSES.csv → Column 0
+          scheduledDuration,                   // duration between Column 0 and Column 1 (seconds)
+          company: cs[5],                      // CLASSES.csv → Column 5
+          course_id: cs[29],                   // CLASSES.csv → Column 29
+          available_seats: parseInt(cs[10], 10), // CLASSES.csv → Column 10
+          cancelledBy,
+          cancelledTime,
+          cancelledByStudent: false,           // populated later
+          cancelledByTeacher: false,
+          cancelledByAdmin: false,
+          cancelledInterval: '',               // populated below
+          teacher: {},
+          students: []
+        };
+
+        // Get participants for this class
+        const parts = participantsData.filter(p => p[2] === slug);
+        const enrolled = parts.filter(p => !(p[9]?.trim().toLowerCase() === 'true'));
+
+        cls.students = enrolled.map(pr => {
+          const enrolledAt = pr[22];
+          const studentCancelledTime = pr[14];
+
+          return {
+            username: pr[4],
+            attended: parseBoolean(pr[10]),
+            tardiness: clampTardiness(timestampDiff(pr[3], pr[11]), scheduledDuration),
+            cancelled: parseBoolean(pr[12]),
+            cancelledBy: pr[13] || '',
+            cancelledTime: studentCancelledTime,
+            cancelledInterval: studentCancelledTime
+              ? (timestampDiff(studentCancelledTime, scheduledStart) / 3600).toFixed(2)
+              : '',
+            enrolledTime: enrolledAt,
+            enrolmentInterval: enrolledAt
+              ? (timestampDiff(enrolledAt, scheduledStart) / 3600).toFixed(2)
+              : '',
+            rating: pr[15],
+            feedback: pr[16]
+          };
+        });
+
+        // Find teacher
+        const teacherRow = parts.find(p => p[9]?.trim().toLowerCase() === 'true');
+        if (teacherRow) {
+          cls.teacher = {
+            username: teacherRow[4],
+            attended: parseBoolean(teacherRow[10]),
+            tardiness: clampTardiness(timestampDiff(teacherRow[3], teacherRow[11]), scheduledDuration),
+            cancelled: parseBoolean(teacherRow[12])
+          };
+        }
+
+        // Calculate cancellation flags
+        const teacherName = cls.teacher?.username;
+        const studentNames = cls.students.map(s => s.username);
+
+        if (cancelledBy) {
+          cls.cancelledByStudent = studentNames.includes(cancelledBy);
+          cls.cancelledByTeacher = cancelledBy === teacherName;
+          cls.cancelledByAdmin = !cls.cancelledByStudent && !cls.cancelledByTeacher;
+
+          cls.cancelledInterval = cancelledTime
+            ? (timestampDiff(cancelledTime, scheduledStart) / 3600).toFixed(2)
+            : '';
+        }
+
+        out[slug] = cls;
       });
+
       return out;
     }
+
 
     function buildTeacherHourCountCSV(processedData, settings, simpleReport) {
       const {
@@ -333,12 +412,12 @@
       // 1) aggregate per-class data
       for (let slug in processedData) {
         const cls = processedData[slug];
-        const durMin = Math.round(cls['scheduled duration'] / 60);
+        const durMin = Math.round(cls['scheduledDuration'] / 60);
         durationsSet.add(durMin);
 
         const t = cls.teacher.username;
         if (!t) continue;
-        const type = (cls['available seats'] === 1) ? 'private' : 'group';
+        const type = (cls['available_seats'] === 1) ? 'private' : 'group';
         if (classTypeFilter !== 'both' && classTypeFilter !== type) continue;
 
         // init buckets
@@ -361,7 +440,7 @@
         if (type === 'private' && payLastMinuteCancellation && Array.isArray(cls.students)) {
           for (let s of cls.students) {
             if (s.cancelled && s['cancelled by'] !== t) {
-              if (timestampDiff(cls['scheduled start'], s['cancelled time']) / 3600 < cancellationWindow) {
+              if (timestampDiff(cls['scheduledStart'], s['cancelled time']) / 3600 < cancellationWindow) {
                 bucket.cancelled++;
                 break;
               }
@@ -500,7 +579,7 @@ function buildTeacherOverviewCSV(processedData) {
       };
     }
     let agg = teachers[teacherUsername];
-    let classType = (cls['available seats'] === 1) ? "private" : "group";
+    let classType = (cls['available_seats'] === 1) ? "private" : "group";
     if (classType === "private") {
        agg.totalPrivate += 1;
     } else {
@@ -574,7 +653,7 @@ function buildTeacherFeedbackCSV(processedData) {
     const teacherUsername = cls.teacher.username;
     if (!teacherUsername) continue;
 
-    const classDate = cls["scheduled start"];
+    const classDate = cls["scheduledStart"];
     for (const student of cls.students) {
       // use the actual keys in your objects:
       const feedback = (student.feedback || "").trim();
@@ -621,7 +700,7 @@ function buildAllCoursesOverviewCSV(processedData) {
   const rows = [header.join(',')];
 
   for (const courseId in byCourse) {
-    const classes = byCourse[courseId].sort((a,b) => new Date(a['scheduled start']) - new Date(b['scheduled start']));
+    const classes = byCourse[courseId].sort((a,b) => new Date(a['scheduledStart']) - new Date(b['scheduledStart']));
     const firstClass = classes[0];
     const teachers = unique(classes.map(cls => cls.teacher?.username).filter(Boolean));
     let allStudentUsernames = [];
@@ -643,13 +722,13 @@ function buildAllCoursesOverviewCSV(processedData) {
     rows.push([
       `"${courseId}"`,
       `"${teachers.join(' - ')}"`,
-      `"${classes[0]['scheduled start']}"`,
-      `"${classes[classes.length-1]['scheduled start']}"`,
+      `"${classes[0]['scheduledStart']}"`,
+      `"${classes[classes.length-1]['scheduledStart']}"`,
       `"${firstClass.level || ''}"`,
       `"${firstClass.description || ''}"`,
       `"${firstClass['course description'] || ''}"`,
       classCount,
-      `"${firstClass['available seats'] || ''}"`,
+      `"${firstClass['available_seats'] || ''}"`,
       uniqueStudents.length,
       attendanceRate
     ].join(','));
@@ -660,7 +739,7 @@ function buildAllCoursesOverviewCSV(processedData) {
 function buildCourseDetailReport(processedData, courseId) {
   const classes = Object.values(processedData)
     .filter(cls => (cls['course id'] || 'NO_ID') === courseId)
-    .sort((a, b) => new Date(a['scheduled start']) - new Date(b['scheduled start']));
+    .sort((a, b) => new Date(a['scheduledStart']) - new Date(b['scheduledStart']));
   if (!classes.length) return { infoCsv: '', classListCsv: '', uniqueStudents: [] };
   const teachers = unique(classes.map(cls => cls.teacher?.username).filter(Boolean));
   let allStudentUsernames = [], attendedCount = 0, totalStudentParticipations = 0;
@@ -682,12 +761,12 @@ function buildCourseDetailReport(processedData, courseId) {
   const infoRow = [
     `"${courseId}"`,
     `"${teachers.join(' - ')}"`,
-    `"${classes[0]['scheduled start']}"`,
-    `"${classes[classes.length-1]['scheduled start']}"`,
+    `"${classes[0]['scheduledStart']}"`,
+    `"${classes[classes.length-1]['scheduledStart']}"`,
     `"${firstClass.level || ''}"`,
     `"${firstClass.description || ''}"`,
     `"${firstClass['course description'] || ''}"`,
-    `"${firstClass['available seats'] || ''}"`,
+    `"${firstClass['available_seats'] || ''}"`,
     uniqueStudents.length,
     classes.length,
     attendanceRate
@@ -697,10 +776,10 @@ function buildCourseDetailReport(processedData, courseId) {
   ];
   const classListRows = [classListHeader.join(',')];
   classes.forEach((cls, idx) => {
-    const dtObj = new Date(cls['scheduled start']);
+    const dtObj = new Date(cls['scheduledStart']);
     const date = dtObj.toLocaleDateString();
     const time = dtObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    const duration = `${Math.floor((cls['scheduled duration'] || 0)/60).toString().padStart(2,'0')}:${((cls['scheduled duration'] || 0)%60).toString().padStart(2,'0')}`;
+    const duration = `${Math.floor((cls['scheduledDuration'] || 0)/60).toString().padStart(2,'0')}:${((cls['scheduledDuration'] || 0)%60).toString().padStart(2,'0')}`;
     const status = cls.cancelled ? 'cancelled' : 'completed';
     const rowByStudent = uniqueStudents.map(username => {
       const stu = Array.isArray(cls.students) ? cls.students.find(s => s.username === username) : undefined;
@@ -741,9 +820,9 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
     for (const classSlug in processedData) {
       const cls = processedData[classSlug];
       if (!classIsInCompany(cls)) continue;
-      const scheduledStart = cls["scheduled start"];
+      const scheduledStart = cls["scheduledStart"];
       const scheduledStartD = new Date(scheduledStart.replace(' ', 'T'));
-      const seats = cls['available seats'];
+      const seats = cls['available_seats'];
 
       for (const student of cls.students) {
         const username = student.username;
@@ -878,81 +957,79 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
     return rows.join("\n");
   }
 
-  function buildOverviewData(processedData, cancellationWindow) {
-    // helper to tally for a given class-type
-    function tally(type) {
+    function buildOverviewData(processedData, cancellationWindow) {
+      function tally(type) {
         const byDuration = {};
 
         Object.values(processedData)
           .filter(cls =>
             type === 'private'
-              ? cls['available seats'] === 1
-              : cls['available seats'] > 1
+              ? cls.available_seats === 1
+              : cls.available_seats > 1
           )
           .forEach(cls => {
-            const d = Math.round(cls['scheduled duration'] / 60);
-
-            // 1) Initialize once per duration
+            const d = Math.round(cls.scheduledDuration / 60);
             if (!byDuration[d]) {
               byDuration[d] = {
-                total:         0,
-                completed:     0,
-                cancelled:     0,  // any class‐level cancellation
-                cancelledLate: 0,  // student cancellations < window
+                total: 0,
+                completed: 0,
+                cancelled: 0,
+                cancelledByStudent: 0,
+                cancelledByTeacher: 0,
+                cancelledByAdmin: 0,
+                studentCancelledLate: 0,
                 teacherNoShow: 0,
                 studentNoShow: 0,
-                bothNoShow:    0
+                bothNoShow: 0
               };
             }
             const bucket = byDuration[d];
             bucket.total++;
 
             const tAtt = cls.teacher.attended;
-            const isClassCancelled = Boolean(cls.cancelledBy);         // class CSV “cancelled” flag
+            const isClassCancelled = Boolean(cls.cancelledBy);
+
+            // Completed = teacher attended and not cancelled
+            if (tAtt && !isClassCancelled) {
+              bucket.completed++;
+            }
+
+            // Cancelled = anyone cancelled
+            if (isClassCancelled) {
+              bucket.cancelled++;
+
+              if (cls.cancelledByStudent) bucket.cancelledByStudent++;
+              if (cls.cancelledByTeacher) bucket.cancelledByTeacher++;
+              if (cls.cancelledByAdmin) bucket.cancelledByAdmin++;
+
+              if (
+                cls.cancelledByStudent &&
+                cls.cancelledInterval !== '' &&
+                parseFloat(cls.cancelledInterval) < cancellationWindow
+              ) {
+                bucket.studentCancelledLate++;
+              }
+            }
+
+            if (!tAtt && !isClassCancelled) {
+              bucket.teacherNoShow++;
+            }
+
             const allStudentsAbsent =
               Array.isArray(cls.students) &&
               cls.students.length > 0 &&
               cls.students.every(s => !s.attended);
 
-            // 2) Completed = teacher attended AND class not cancelled
-            if (tAtt && !isClassCancelled) {
-              bucket.completed++;
-            }
-
-            // 3) Cancelled = class status cancelled (teacher/admin/student)
-            if (isClassCancelled) {
-              bucket.cancelled++;
-            }
-
-            // 4) Cancelled < window = class cancelled by a student within the window
-            if (cls.cancelledByStudent) {
-              const diffH = timestampDiff(
-                cls['scheduled start'],
-                cls.cancelledTime
-              ) / 3600;
-              if (diffH < cancellationWindow) {
-                bucket.cancelledLate++;
-              }
-            }
-
-            // 5) Teacher no-show = teacher didn’t attend AND class not cancelled
-            if (!tAtt && !isClassCancelled) {
-              bucket.teacherNoShow++;
-            }
-
-            // 6) Student no-show
             if (type === 'group') {
               if (allStudentsAbsent) {
                 bucket.studentNoShow++;
               }
             } else {
-              // private: teacher attended but no students did
               if (tAtt && allStudentsAbsent) {
                 bucket.studentNoShow++;
               }
             }
 
-            // 7) Both no-show = neither teacher nor any students attended
             if (!tAtt && !isClassCancelled && allStudentsAbsent) {
               bucket.bothNoShow++;
             }
@@ -961,13 +1038,156 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         return byDuration;
       }
 
+      const groupData = tally('group');
+      const privateData = tally('private');
+      return { groupData, privateData };
+    }
+
+    function buildPrivateAveragesTable(data) {
+      const studentStats = {};
+      const teacherStats = {};
+
+      for (const cls of Object.values(data)) {
+        if (cls.available_seats !== 1) continue; // Only private classes
+
+        const teacher = cls.teacher.username;
+        const tAttended = cls.teacher.attended;
+
+        if (teacher) {
+          teacherStats[teacher] = teacherStats[teacher] || {
+            total: 0, attended: 0, cancelled: 0,
+            cancelledByTeacher: 0, cancelledByStudent: 0, cancelledByAdmin: 0,
+            cancelledIntervalSum: 0, cancelledIntervalCount: 0,
+            teacherNoShow: 0, studentNoShow: 0,
+            tardinessSum: 0, tardinessCount: 0,
+            classDates: []
+          };
+          const t = teacherStats[teacher];
+          t.total++;
+          if (cls.teacher.attended) t.attended++;
+          if (cls.teacher.cancelled) t.teacherNoShow++;
+          if (cls.cancelledBy) t.cancelled++;
+          if (cls.cancelledByTeacher) t.cancelledByTeacher++;
+          if (cls.cancelledByStudent) t.cancelledByStudent++;
+          if (cls.cancelledByAdmin) t.cancelledByAdmin++;
+          if (cls.cancelledInterval !== '') {
+            t.cancelledIntervalSum += parseFloat(cls.cancelledInterval);
+            t.cancelledIntervalCount++;
+          }
+          if (typeof cls.teacher.tardiness === 'number') {
+            t.tardinessSum += cls.teacher.tardiness / 60;
+            t.tardinessCount++;
+          }
+
+          const allStudentsAbsent = cls.students.length > 0 && cls.students.every(s => !s.attended);
+          if (allStudentsAbsent) t.studentNoShow++;
+
+          t.classDates.push(new Date(cls.scheduledStart));
+        }
+
+        for (const student of cls.students) {
+          const username = student.username;
+          if (!username) continue;
+          studentStats[username] = studentStats[username] || {
+            total: 0, attended: 0, cancelled: 0,
+            cancelledByStudent: 0, cancelledByTeacher: 0, cancelledByAdmin: 0,
+            cancelledIntervalSum: 0, cancelledIntervalCount: 0,
+            enrolIntervalSum: 0, enrolIntervalCount: 0,
+            tardinessSum: 0, tardinessCount: 0,
+            studentNoShow: 0, teacherNoShow: 0,
+            classDates: []
+          };
+          const s = studentStats[username];
+          s.total++;
+          if (student.attended) s.attended++;
+          else s.studentNoShow++;
+
+          if (!tAttended) s.teacherNoShow++;
+
+          if (student.cancelled) {
+            s.cancelled++;
+            if (student.cancelledBy === username) s.cancelledByStudent++;
+            else if (student.cancelledBy === teacher) s.cancelledByTeacher++;
+            else if (student.cancelledBy) s.cancelledByAdmin++;
+
+            if (!isNaN(parseFloat(student.cancelledInterval))) {
+              s.cancelledIntervalSum += parseFloat(student.cancelledInterval);
+              s.cancelledIntervalCount++;
+            }
+          }
+
+          if (!isNaN(parseFloat(student.enrolmentInterval))) {
+            s.enrolIntervalSum += parseFloat(student.enrolmentInterval);
+            s.enrolIntervalCount++;
+          }
+
+          if (typeof student.tardiness === 'number') {
+            s.tardinessSum += student.tardiness / 60;
+            s.tardinessCount++;
+          }
+
+          s.classDates.push(new Date(cls.scheduledStart));
+        }
+      }
+
+      function calcAvg(statsMap) {
+        const values = Object.values(statsMap);
+        const avg = key => values.length ? (values.reduce((a, b) => a + (b[key] || 0), 0) / values.length).toFixed(2) : '0.00';
+        const avgDiv = (numKey, denomKey) =>
+          values.length
+            ? (values.reduce((a, b) => a + (b[denomKey] ? b[numKey] / b[denomKey] : 0), 0) / values.length).toFixed(2)
+            : '0.00';
+        const avgClassInterval = values.length
+          ? (
+              values.reduce((acc, val) => {
+                const dates = val.classDates.sort((a, b) => a - b);
+                if (dates.length < 2) return acc;
+                let sum = 0;
+                for (let i = 1; i < dates.length; i++) {
+                  sum += (dates[i] - dates[i - 1]) / (1000 * 3600);
+                }
+                return acc + (sum / (dates.length - 1));
+              }, 0) / values.length
+            ).toFixed(2)
+          : '0.00';
+
+        return {
+          'Average Classes': avg('total'),
+          'Average Attended Classes': avg('attended'),
+          'Average Cancellations (Total)': avg('cancelled'),
+          'Average Cancellations by Student': avg('cancelledByStudent'),
+          'Average Cancellations by Teacher': avg('cancelledByTeacher'),
+          'Average Cancellations by Admin': avg('cancelledByAdmin'),
+          'Average Cancellation Interval': avgDiv('cancelledIntervalSum', 'cancelledIntervalCount'),
+          'Average Teacher No Shows': avg('teacherNoShow'),
+          'Average Student No Shows': avg('studentNoShow'),
+          'Average Tardinesss': avgDiv('tardinessSum', 'tardinessCount'),
+          'Average Enrolment Interval': avgDiv('enrolIntervalSum', 'enrolIntervalCount'),
+          'Average Class Interval': avgClassInterval
+        };
+      }
+
+      const studentRow = calcAvg(studentStats);
+      const teacherRow = calcAvg(teacherStats);
+
+      const labels = Object.keys(studentRow);
+      let html = '<table><thead><tr><th>Metric</th><th>Students</th><th>Teachers</th></tr></thead><tbody>';
+
+      for (const label of labels) {
+        html += `<tr>
+          <th>${label}</th>
+          <td>${studentRow[label]}</td>
+          <td>${teacherRow[label]}</td>
+        </tr>`;
+      }
+
+      html += '</tbody></table>';
+      return html;
+    }
 
 
 
-    const groupData   = tally('group');
-    const privateData = tally('private');
-    return { groupData, privateData };
-  }
+
 
 
 
@@ -1002,7 +1222,7 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         // --- populate duration checkboxes ---
         const durations = [...new Set(
         Object.values(data)
-                .map(c => Math.round(c['scheduled duration'] / 60))
+                .map(c => Math.round(c['scheduledDuration'] / 60))
         )].sort((a, b) => a - b);
 
         const durContainer = document.getElementById('durationFilterContainer');
@@ -1041,13 +1261,16 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         const durations = Object.keys(dataset).map(Number).sort((a,b)=>a-b);
         const header = ['Metric', ...durations.map(d=>`${d} min`), 'Total'];
         const metrics = [
-          { key:'total',        label:'Total classes' },
-          { key:'completed',    label:'Completed classes' },
-          { key:'cancelled',    label:'Cancelled classes' },
-          { key:'cancelledLate',label:`Cancelled < ${cw}h` },
-          { key:'teacherNoShow',label:'Teacher no show' },
-          { key:'studentNoShow',label:'Student no show' },
-          { key:'bothNoShow',label:'No show (both)' } // reuse teacherNoShow for “both”
+          { key: 'total',                label: 'Total classes' },
+          { key: 'completed',            label: 'Completed classes' },
+          { key: 'cancelled',            label: 'Cancelled classes' },
+          { key: 'cancelledByStudent',   label: 'Cancelled by student' },
+          { key: 'cancelledByTeacher',   label: 'Cancelled by teacher' },
+          { key: 'cancelledByAdmin',     label: 'Cancelled by admin' },
+          { key: 'studentCancelledLate', label: `Student cancelled < ${cw}h` },
+          { key: 'teacherNoShow',        label: 'Teacher no show' },
+          { key: 'studentNoShow',        label: 'Student no show' },
+          { key: 'bothNoShow',           label: 'No show (both)' }
         ];
 
         // build CSV rows
@@ -1078,6 +1301,7 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
 
       render('group',   groupData,   'groupOverviewTable',   'downloadGroupOverviewBtn',   'overview-group.csv');
       render('private', privateData, 'privateOverviewTable', 'downloadPrivateOverviewBtn', 'overview-private.csv');
+      document.getElementById('privateAveragesTable').innerHTML = buildPrivateAveragesTable(data);
       show('overviewReportOutput');
     });
 
@@ -1110,7 +1334,7 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
       const filteredData = Object.fromEntries(
         Object.entries(data)
           .filter(([slug, cls]) =>
-            selectedDurations.includes(Math.round(cls['scheduled duration'] / 60))
+            selectedDurations.includes(Math.round(cls['scheduledDuration'] / 60))
           )
       );
 
@@ -1168,6 +1392,17 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
     });
 
     function downloadCSV(csv,fn){ const b=new Blob([csv],{type:'text/csv'}), u=URL.createObjectURL(b), a=document.createElement('a'); a.href=u; a.download=fn; a.click(); URL.revokeObjectURL(u); }
+
+    document.getElementById('downloadJsonBtn').addEventListener('click', () => {
+      const jsonBlob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(jsonBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'processedData.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
   </script>
 </body>
 </html>
