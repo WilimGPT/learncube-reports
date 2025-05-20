@@ -276,7 +276,7 @@
 
       <hr style="margin:2rem 0;">
       <div style="margin-bottom:1rem;">
-        <strong>Private Class Summary Averages</strong>
+        <strong>User Averages</strong>
       </div>
       <div class="table-container" id="privateAveragesTable"></div>
 
@@ -1157,12 +1157,12 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
           'Average Cancellations by Student': avg('cancelledByStudent'),
           'Average Cancellations by Teacher': avg('cancelledByTeacher'),
           'Average Cancellations by Admin': avg('cancelledByAdmin'),
-          'Average Cancellation Interval': avgDiv('cancelledIntervalSum', 'cancelledIntervalCount'),
+          'Average Cancellation Interval (hours)': avgDiv('cancelledIntervalSum', 'cancelledIntervalCount'),
           'Average Teacher No Shows': avg('teacherNoShow'),
           'Average Student No Shows': avg('studentNoShow'),
-          'Average Tardinesss': avgDiv('tardinessSum', 'tardinessCount'),
-          'Average Enrolment Interval': avgDiv('enrolIntervalSum', 'enrolIntervalCount'),
-          'Average Class Interval': avgClassInterval
+          'Average Tardinesss (min)': avgDiv('tardinessSum', 'tardinessCount'),
+          'Average Enrolment Interval (hours)': avgDiv('enrolIntervalSum', 'enrolIntervalCount'),
+          'Average Class Interval (hours)': avgClassInterval
         };
       }
 
