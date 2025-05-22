@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1204,7 +1205,20 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
   <script>
     // State & UI
     let data=null, courses=[], companies=[];
-    const panels=['fileUploadPanel','teacherHourCountSettings','overviewSettings','teacherReportPanel','courseReportSettings','studentReportSettings','hourCountReportOutput','teacherReportOutput','allCoursesOverviewReport','courseDetailedReport','studentReportOutput'];
+    const panels = [
+      'fileUploadPanel',
+      'teacherHourCountSettings',
+      'overviewSettings',
+      'teacherReportPanel',
+      'courseReportSettings',
+      'studentReportSettings',
+      'hourCountReportOutput',
+      'teacherReportOutput',
+      'allCoursesOverviewReport',
+      'courseDetailedReport',
+      'studentReportOutput',
+      'overviewReportOutput'
+    ];
     function show(id){ panels.forEach(p=>document.getElementById(p).classList.add('hidden')); document.getElementById(id).classList.remove('hidden'); }
 
     // Upload
