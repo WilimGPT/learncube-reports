@@ -122,6 +122,35 @@
     margin: 0 auto;
     }
 
+    .tag {
+      display: inline-block;
+      padding: 4px 8px;
+      background-color: #e0f0ff;
+      border: 1px solid #328ccc;
+      border-radius: 4px;
+      margin: 2px;
+      font-size: 0.9em;
+    }
+    .tag.invalid {
+      background-color: #ffd6d6;
+      border-color: #cc3232;
+      color: #cc3232;
+    }
+    .tag .remove {
+      margin-left: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    #customStudentInput {
+    width: 100%;
+    max-width: 600px;
+    height: 40px;
+    font-size: 1rem;
+    padding: 8px 12px;
+    box-sizing: border-box;
+  }
+
 
   </style>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
@@ -203,8 +232,29 @@
 
     <section id="studentReportSettings" class="card hidden">
       <h3>Student Report Settings</h3>
-      <label>Cancellation Window (hrs): <input type="number" id="studentCancellationWindow" value="24" min="0"></label><br><br>
-      <label>Company: <select id="companySelect"><option value="ALL">All</option></select></label><br><br>
+      <label>Cancellation Window (hrs): 
+        <input type="number" id="studentCancellationWindow" value="24" min="0">
+      </label><br><br>
+
+      <fieldset>
+        <legend>Student Selection</legend>
+        <label><input type="radio" name="studentSelection" value="all" checked> All Students</label>
+        <label><input type="radio" name="studentSelection" id="companyRadio"value="company"> Company</label>
+        <label><input type="radio" name="studentSelection" value="custom"> Custom List</label><br><br>
+
+        <div id="companySelectWrapper" class="hidden">
+          <label>Company: 
+            <select id="companySelect"><option value="ALL">All</option></select>
+          </label>
+        </div>
+
+        <div id="customListWrapper" class="hidden">
+          <input type="text" id="customStudentInput" placeholder="Enter usernames (comma separated)">
+          <button type="button" id="addCustomStudentBtn">Add</button>
+          <div id="customStudentTags" style="margin-top: 10px;"></div>
+        </div>
+      </fieldset><br>
+
       <button id="generateStudentReportBtn">Generate Student Report</button>
     </section>
 
@@ -290,6 +340,9 @@
 
  </div>
   <script>
+
+
+
     // Helpers
     function parseCSVFile(file) {
       return new Promise((resolve, reject) => {
@@ -393,6 +446,8 @@
 
       return out;
     }
+
+    
 
 
     function buildTeacherHourCountCSV(processedData, settings, simpleReport) {
@@ -804,386 +859,440 @@ function buildCourseDetailReport(processedData, courseId) {
   };
 }
 
-function buildStudentReport(processedData, { cancellationWindow, companyId }) {
-    // companyId: "ALL" or a specific ID
-    // cancellationWindow: hours
 
-    // Gather data per student
-    // We'll use a map: username => {...stats...}
-    let students = {};
+  let validatedStudentUsernames = [];
 
-    // Used for company/class filtering
-    function classIsInCompany(cls) {
-      return companyId === 'ALL' || String(cls.company) === String(companyId);
-    }
-
-    for (const classSlug in processedData) {
-      const cls = processedData[classSlug];
-      if (!classIsInCompany(cls)) continue;
-      const scheduledStart = cls["scheduledStart"];
-      const scheduledStartD = new Date(scheduledStart.replace(' ', 'T'));
-      const seats = cls['available_seats'];
-
-      for (const student of cls.students) {
-        const username = student.username;
-        if (!username) continue;
-        if (!students[username]) {
-          students[username] = {
-            username,
-            company: cls.company,
-            totalGroup: 0,
-            totalPrivate: 0,
-            attended: 0,
-            noShow: 0,
-            cancelled: 0,
-            cancelledLate: 0,
-            cancellationIntervals: [],
-            ratingSum: 0,
-            ratingCount: 0,
-            enrolmentIntervals: [],
-            tardinessSum: 0,
-            tardinessCount: 0,
-            classDates: []
-          };
-        }
-        const s = students[username];
-        if (seats === 1) { s.totalPrivate++; }
-        else { s.totalGroup++; }
-        s.classDates.push(scheduledStartD);
-
-        // Attendance stats
-        if (student.cancelled) {
-          s.cancelled++;
-          if (student["cancelled time"]) {
-            // Calculate interval in hours
-            const cancelledD = new Date(student["cancelled time"].replace(' ', 'T'));
-            const diffHr = (scheduledStartD - cancelledD) / (1000 * 3600);
-            s.cancellationIntervals.push(diffHr);
-            if (diffHr < cancellationWindow) s.cancelledLate++;
-          }
-        } else if (student.attended) {
-          s.attended++;
-        } else {
-          s.noShow++;
-        }
-
-        // Enrolment interval (enrolled_at to class start)
-        if (student["enrolled at"]) {
-          const dEnr = new Date(student["enrolled at"].replace(' ', 'T'));
-          const diffHr = (scheduledStartD - dEnr) / (1000 * 3600);
-          s.enrolmentIntervals.push(diffHr);
-        }
-
-        // Tardiness
-        if (typeof student.tardiness === 'number') {
-          s.tardinessSum += student.tardiness / 60; // convert to minutes
-          s.tardinessCount++;
-        }
-
-        // Rating
-        const rating = parseFloat(student.rating);
-        if (!isNaN(rating)) {
-          s.ratingSum += rating;
-          s.ratingCount++;
-        }
-      }
-    }
-
-    // Compute average class interval for each student
-    const rows = [
-      [
-        "student",
-        "company",
-        "total group classes",
-        "total private classes",
-        "attendance rate",
-        "no show rate",
-        "cancellation rate",
-        "late cancellation rate",
-        "total cancelled late (not refunded)",
-        "average cancellation interval (hours)",
-        "average tardiness",
-        "average rating",
-        "average enrolment interval (hours)",
-        "average class interval (hours)"
-      ].join(",")
-    ];
-
-    Object.values(students).forEach(s => {
-      const totalClasses = s.totalGroup + s.totalPrivate;
-      const attended = s.attended;
-      const noShow = s.noShow;
-      const cancelled = s.cancelled;
-      const cancelledLate = s.cancelledLate;
-      const total = totalClasses;
-      const attendanceRate = total ? (attended/total).toFixed(2) : "";
-      const noShowRate = total ? (noShow/total).toFixed(2) : "";
-      const cancellationRate = total ? (cancelled/total).toFixed(2) : "";
-      const lateCancellationRate = total ? (cancelledLate/total).toFixed(2) : "";
-      const avgCancellationInterval = s.cancellationIntervals.length ? (s.cancellationIntervals.reduce((a,b)=>a+b,0)/s.cancellationIntervals.length).toFixed(2) : "";
-      const avgTardiness = s.tardinessCount ? (s.tardinessSum/s.tardinessCount).toFixed(2) : "";
-      const avgRating = s.ratingCount ? (s.ratingSum/s.ratingCount).toFixed(2) : "";
-      const avgEnrolInterval = s.enrolmentIntervals.length ? (s.enrolmentIntervals.reduce((a,b)=>a+b,0)/s.enrolmentIntervals.length).toFixed(2) : "";
-
-      // Average class interval
-      let avgClassInterval = "";
-      if (s.classDates.length > 1) {
-        const sortedDates = s.classDates.sort((a, b) => a - b);
-        let sumIntervals = 0;
-        for (let i = 1; i < sortedDates.length; i++) {
-          sumIntervals += (sortedDates[i] - sortedDates[i - 1]) / (1000 * 3600);
-        }
-        avgClassInterval = (sumIntervals / (sortedDates.length - 1)).toFixed(2);
-      }
-
-      rows.push([
-        s.username,
-        s.company,
-        s.totalGroup,
-        s.totalPrivate,
-        attendanceRate,
-        noShowRate,
-        cancellationRate,
-        lateCancellationRate,
-        s.cancelledLate,
-        avgCancellationInterval,
-        avgTardiness,
-        avgRating,
-        avgEnrolInterval,
-        avgClassInterval
-      ].join(","));
-    });
-
-    return rows.join("\n");
+  function updateStudentRadioUI() {
+    const selected = document.querySelector('input[name="studentSelection"]:checked').value;
+    document.getElementById('companySelectWrapper').classList.toggle('hidden', selected !== 'company');
+    document.getElementById('customListWrapper').classList.toggle('hidden', selected !== 'custom');
+    document.getElementById('companySelect').disabled = (selected !== 'company');
   }
 
-    function buildOverviewData(processedData, cancellationWindow) {
-      function tally(type) {
-        const byDuration = {};
+  document.querySelectorAll('input[name="studentSelection"]').forEach(radio =>
+    radio.addEventListener('change', updateStudentRadioUI)
+  );
 
-        Object.values(processedData)
-          .filter(cls =>
-            type === 'private'
-              ? cls.available_seats === 1
-              : cls.available_seats > 1
-          )
-          .forEach(cls => {
-            const d = Math.round(cls.scheduledDuration / 60);
-            if (!byDuration[d]) {
-              byDuration[d] = {
-                total: 0,
-                completed: 0,
-                cancelled: 0,
-                cancelledByStudent: 0,
-                cancelledByTeacher: 0,
-                cancelledByAdmin: 0,
-                studentCancelledLate: 0,
-                teacherNoShow: 0,
-                studentNoShow: 0,
-                bothNoShow: 0
-              };
-            }
-            const bucket = byDuration[d];
-            bucket.total++;
+  document.getElementById('addCustomStudentBtn').addEventListener('click', () => {
+    const input = document.getElementById('customStudentInput');
+    const tagContainer = document.getElementById('customStudentTags');
+    const usernames = input.value.split(',').map(u => u.trim()).filter(u => u.length > 0);
 
-            const tAtt = cls.teacher.attended;
-            const isClassCancelled = Boolean(cls.cancelledBy);
+    usernames.forEach(username => {
+      if (tagContainer.querySelector(`[data-username="${username}"]`)) return; // Skip duplicates
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.dataset.username = username;
 
-            // Completed = teacher attended and not cancelled
-            if (tAtt && !isClassCancelled) {
-              bucket.completed++;
-            }
+      const exists = validatedStudentUsernames.includes(username);
+      if (!exists) tag.classList.add('invalid');
+      tag.innerHTML = exists ? username : `Username not found: ${username}`;
+      
+      const remove = document.createElement('span');
+      remove.className = 'remove';
+      remove.textContent = '×';
+      remove.onclick = () => tag.remove();
+      tag.appendChild(remove);
 
-            // Cancelled = anyone cancelled
-            if (isClassCancelled) {
-              bucket.cancelled++;
+      tagContainer.appendChild(tag);
+    });
 
-              if (cls.cancelledByStudent) bucket.cancelledByStudent++;
-              if (cls.cancelledByTeacher) bucket.cancelledByTeacher++;
-              if (cls.cancelledByAdmin) bucket.cancelledByAdmin++;
+    input.value = '';
+  });
 
-              if (
-                cls.cancelledByStudent &&
-                cls.cancelledInterval !== '' &&
-                parseFloat(cls.cancelledInterval) < cancellationWindow
-              ) {
-                bucket.studentCancelledLate++;
-              }
-            }
 
-            if (!tAtt && !isClassCancelled) {
-              bucket.teacherNoShow++;
-            }
 
-            const allStudentsAbsent =
-              Array.isArray(cls.students) &&
-              cls.students.length > 0 &&
-              cls.students.every(s => !s.attended);
 
-            if (type === 'group') {
-              if (allStudentsAbsent) {
-                bucket.studentNoShow++;
-              }
-            } else {
-              if (tAtt && allStudentsAbsent) {
-                bucket.studentNoShow++;
-              }
-            }
+function buildStudentReport(processedData, {
+  cancellationWindow,
+  companyId,
+  filterMode,   // 'all', 'company', 'custom'
+  customList    // array of valid usernames (strings)
+}) {
+  // Per-student aggregates
+  const students = {};
 
-            if (!tAtt && !isClassCancelled && allStudentsAbsent) {
-              bucket.bothNoShow++;
-            }
-          });
+  for (const slug in processedData) {
+    const cls = processedData[slug];
 
-        return byDuration;
-      }
-
-      const groupData = tally('group');
-      const privateData = tally('private');
-      return { groupData, privateData };
+    // --- FILTER CLASSES ACCORDING TO MODE ---
+    switch (filterMode) {
+      case 'all':
+        // No class filter needed - always include class
+        break;
+      case 'company':
+        // Only include classes that match the selected company, unless companyId is 'ALL'
+        if (companyId !== 'ALL' && String(cls.company) !== String(companyId)) {
+          continue;
+        }
+        break;
+      case 'custom':
+        // No class-level filter: students in any company/class are eligible
+        break;
+      default:
+        // Should never occur
+        continue;
     }
 
-    function buildPrivateAveragesTable(data) {
-      const studentStats = {};
-      const teacherStats = {};
+    const scheduledStartD = new Date(cls.scheduledStart.replace(' ', 'T'));
+    const seats = cls.available_seats;
 
-      for (const cls of Object.values(data)) {
-        if (cls.available_seats !== 1) continue; // Only private classes
+    for (const student of cls.students) {
+      const username = student.username;
+      if (!username) continue;
 
-        const teacher = cls.teacher.username;
-        const tAttended = cls.teacher.attended;
-
-        if (teacher) {
-          teacherStats[teacher] = teacherStats[teacher] || {
-            total: 0, attended: 0, cancelled: 0,
-            cancelledByTeacher: 0, cancelledByStudent: 0, cancelledByAdmin: 0,
-            cancelledIntervalSum: 0, cancelledIntervalCount: 0,
-            teacherNoShow: 0, studentNoShow: 0,
-            tardinessSum: 0, tardinessCount: 0,
-            classDates: []
-          };
-          const t = teacherStats[teacher];
-          t.total++;
-          if (cls.teacher.attended) t.attended++;
-          if (cls.teacher.cancelled) t.teacherNoShow++;
-          if (cls.cancelledBy) t.cancelled++;
-          if (cls.cancelledByTeacher) t.cancelledByTeacher++;
-          if (cls.cancelledByStudent) t.cancelledByStudent++;
-          if (cls.cancelledByAdmin) t.cancelledByAdmin++;
-          if (cls.cancelledInterval !== '') {
-            t.cancelledIntervalSum += parseFloat(cls.cancelledInterval);
-            t.cancelledIntervalCount++;
-          }
-          if (typeof cls.teacher.tardiness === 'number') {
-            t.tardinessSum += cls.teacher.tardiness / 60;
-            t.tardinessCount++;
-          }
-
-          const allStudentsAbsent = cls.students.length > 0 && cls.students.every(s => !s.attended);
-          if (allStudentsAbsent) t.studentNoShow++;
-
-          t.classDates.push(new Date(cls.scheduledStart));
-        }
-
-        for (const student of cls.students) {
-          const username = student.username;
-          if (!username) continue;
-          studentStats[username] = studentStats[username] || {
-            total: 0, attended: 0, cancelled: 0,
-            cancelledByStudent: 0, cancelledByTeacher: 0, cancelledByAdmin: 0,
-            cancelledIntervalSum: 0, cancelledIntervalCount: 0,
-            enrolIntervalSum: 0, enrolIntervalCount: 0,
-            tardinessSum: 0, tardinessCount: 0,
-            studentNoShow: 0, teacherNoShow: 0,
-            classDates: []
-          };
-          const s = studentStats[username];
-          s.total++;
-          if (student.attended) s.attended++;
-          else s.studentNoShow++;
-
-          if (!tAttended) s.teacherNoShow++;
-
-          if (student.cancelled) {
-            s.cancelled++;
-            if (student.cancelledBy === username) s.cancelledByStudent++;
-            else if (student.cancelledBy === teacher) s.cancelledByTeacher++;
-            else if (student.cancelledBy) s.cancelledByAdmin++;
-
-            if (!isNaN(parseFloat(student.cancelledInterval))) {
-              s.cancelledIntervalSum += parseFloat(student.cancelledInterval);
-              s.cancelledIntervalCount++;
-            }
-          }
-
-          if (!isNaN(parseFloat(student.enrolmentInterval))) {
-            s.enrolIntervalSum += parseFloat(student.enrolmentInterval);
-            s.enrolIntervalCount++;
-          }
-
-          if (typeof student.tardiness === 'number') {
-            s.tardinessSum += student.tardiness / 60;
-            s.tardinessCount++;
-          }
-
-          s.classDates.push(new Date(cls.scheduledStart));
-        }
+      // --- FILTER STUDENTS ACCORDING TO MODE ---
+      if (filterMode === 'custom' && !customList.includes(username)) {
+        continue;
       }
+      // No further checks for 'all' and 'company'
 
-      function calcAvg(statsMap) {
-        const values = Object.values(statsMap);
-        const avg = key => values.length ? (values.reduce((a, b) => a + (b[key] || 0), 0) / values.length).toFixed(2) : '0.00';
-        const avgDiv = (numKey, denomKey) =>
-          values.length
-            ? (values.reduce((a, b) => a + (b[denomKey] ? b[numKey] / b[denomKey] : 0), 0) / values.length).toFixed(2)
-            : '0.00';
-        const avgClassInterval = values.length
-          ? (
-              values.reduce((acc, val) => {
-                const dates = val.classDates.sort((a, b) => a - b);
-                if (dates.length < 2) return acc;
-                let sum = 0;
-                for (let i = 1; i < dates.length; i++) {
-                  sum += (dates[i] - dates[i - 1]) / (1000 * 3600);
-                }
-                return acc + (sum / (dates.length - 1));
-              }, 0) / values.length
-            ).toFixed(2)
-          : '0.00';
-
-        return {
-          'Average Classes': avg('total'),
-          'Average Attended Classes': avg('attended'),
-          'Average Cancellations (Total)': avg('cancelled'),
-          'Average Cancellations by Student': avg('cancelledByStudent'),
-          'Average Cancellations by Teacher': avg('cancelledByTeacher'),
-          'Average Cancellations by Admin': avg('cancelledByAdmin'),
-          'Average Cancellation Interval (hours)': avgDiv('cancelledIntervalSum', 'cancelledIntervalCount'),
-          'Average Teacher No Shows': avg('teacherNoShow'),
-          'Average Student No Shows': avg('studentNoShow'),
-          'Average Tardinesss (min)': avgDiv('tardinessSum', 'tardinessCount'),
-          'Average Enrolment Interval (hours)': avgDiv('enrolIntervalSum', 'enrolIntervalCount'),
-          'Average Class Interval (hours)': avgClassInterval
+      // If not already created, make an entry for this student
+      if (!students[username]) {
+        students[username] = {
+          username,
+          company: cls.company,
+          totalGroup: 0,
+          totalPrivate: 0,
+          attended: 0,
+          noShow: 0,
+          cancelled: 0,
+          cancelledLate: 0,
+          cancellationIntervals: [],
+          ratingSum: 0,
+          ratingCount: 0,
+          enrolmentIntervals: [],
+          tardinessSum: 0,
+          tardinessCount: 0,
+          classDates: []
         };
       }
+      const s = students[username];
 
-      const studentRow = calcAvg(studentStats);
-      const teacherRow = calcAvg(teacherStats);
+      // PRIVATE VS GROUP
+      if (seats === 1) s.totalPrivate++;
+      else s.totalGroup++;
 
-      const labels = Object.keys(studentRow);
-      let html = '<table><thead><tr><th>Metric</th><th>Students</th><th>Teachers</th></tr></thead><tbody>';
+      s.classDates.push(scheduledStartD);
 
-      for (const label of labels) {
-        html += `<tr>
-          <th>${label}</th>
-          <td>${studentRow[label]}</td>
-          <td>${teacherRow[label]}</td>
-        </tr>`;
+      // ATTENDANCE
+      if (student.cancelled) {
+        s.cancelled++;
+        if (student.cancelledTime) {
+          const cancelledD = new Date(student.cancelledTime.replace(' ', 'T'));
+          const diffHr = (scheduledStartD - cancelledD) / 3600e3;
+          s.cancellationIntervals.push(diffHr);
+          if (diffHr < cancellationWindow) s.cancelledLate++;
+        }
+      } else if (student.attended) {
+        s.attended++;
+      } else {
+        s.noShow++;
       }
 
-      html += '</tbody></table>';
-      return html;
+      // ENROLMENT INTERVAL
+      if (student.enrolledTime) {
+        const enrD = new Date(student.enrolledTime.replace(' ', 'T'));
+        const diffHr = (scheduledStartD - enrD) / 3600e3;
+        s.enrolmentIntervals.push(diffHr);
+      }
+
+      // TARDINESS
+      if (typeof student.tardiness === 'number') {
+        s.tardinessSum += student.tardiness / 60;
+        s.tardinessCount++;
+      }
+
+      // RATING
+      const r = parseFloat(student.rating);
+      if (!isNaN(r)) {
+        s.ratingSum += r;
+        s.ratingCount++;
+      }
     }
+  }
+
+  // --- OUTPUT CSV ---
+  const header = [
+    "student","company","total group classes","total private classes","attendance rate",
+    "no show rate","cancellation rate","late cancellation rate",
+    "average cancellation interval (hrs)","average tardiness (min)",
+    "average rating","average enrolment interval (hrs)","average class interval (hrs)"
+  ].join(",");
+
+  const rows = [header];
+  Object.values(students).forEach(s => {
+    const total = s.totalGroup + s.totalPrivate;
+    const attRate = total ? (s.attended/total).toFixed(2) : "";
+    const noShowRate = total ? (s.noShow/total).toFixed(2) : "";
+    const cancelRate = total ? (s.cancelled/total).toFixed(2) : "";
+    const lateCancelRate = total ? (s.cancelledLate/total).toFixed(2) : "";
+
+    const avgCancelInt = s.cancellationIntervals.length
+      ? (s.cancellationIntervals.reduce((a,b)=>a+b,0)/s.cancellationIntervals.length).toFixed(2)
+      : "";
+
+    const avgTard = s.tardinessCount
+      ? (s.tardinessSum/s.tardinessCount).toFixed(2)
+      : "";
+
+    const avgRating = s.ratingCount
+      ? (s.ratingSum/s.ratingCount).toFixed(2)
+      : "";
+
+    const avgEnrol = s.enrolmentIntervals.length
+      ? (s.enrolmentIntervals.reduce((a,b)=>a+b,0)/s.enrolmentIntervals.length).toFixed(2)
+      : "";
+
+    // average class interval between attended classes
+    let avgClassInt = "";
+    if (s.classDates.length > 1) {
+      const dates = s.classDates.sort((a,b)=>a-b);
+      let sum=0;
+      for (let i=1; i<dates.length; i++) {
+        sum += (dates[i]-dates[i-1])/3600e3;
+      }
+      avgClassInt = (sum/(dates.length-1)).toFixed(2);
+    }
+
+    rows.push([
+      s.username, s.company, s.totalGroup, s.totalPrivate, attRate,
+      noShowRate, cancelRate, lateCancelRate,
+      avgCancelInt, avgTard, avgRating, avgEnrol, avgClassInt
+    ].join(","));
+  });
+
+  return rows.join("\n");
+}
+
+
+function buildOverviewData(processedData, cancellationWindow) {
+function tally(type) {
+  const byDuration = {};
+
+  Object.values(processedData)
+    .filter(cls =>
+      type === 'private'
+        ? cls.available_seats === 1
+        : cls.available_seats > 1
+    )
+    .forEach(cls => {
+      const d = Math.round(cls.scheduledDuration / 60);
+      if (!byDuration[d]) {
+        byDuration[d] = {
+          total: 0,
+          completed: 0,
+          cancelled: 0,
+          cancelledByStudent: 0,
+          cancelledByTeacher: 0,
+          cancelledByAdmin: 0,
+          studentCancelledLate: 0,
+          teacherNoShow: 0,
+          studentNoShow: 0,
+          bothNoShow: 0
+        };
+      }
+      const bucket = byDuration[d];
+      bucket.total++;
+
+      const tAtt = cls.teacher.attended;
+      const isClassCancelled = Boolean(cls.cancelledBy);
+
+      // Completed = teacher attended and not cancelled
+      if (tAtt && !isClassCancelled) {
+        bucket.completed++;
+      }
+
+      // Cancelled = anyone cancelled
+      if (isClassCancelled) {
+        bucket.cancelled++;
+
+        if (cls.cancelledByStudent) bucket.cancelledByStudent++;
+        if (cls.cancelledByTeacher) bucket.cancelledByTeacher++;
+        if (cls.cancelledByAdmin) bucket.cancelledByAdmin++;
+
+        if (
+          cls.cancelledByStudent &&
+          cls.cancelledInterval !== '' &&
+          parseFloat(cls.cancelledInterval) < cancellationWindow
+        ) {
+          bucket.studentCancelledLate++;
+        }
+      }
+
+      if (!tAtt && !isClassCancelled) {
+        bucket.teacherNoShow++;
+      }
+
+      const allStudentsAbsent =
+        Array.isArray(cls.students) &&
+        cls.students.length > 0 &&
+        cls.students.every(s => !s.attended);
+
+      if (type === 'group') {
+        if (allStudentsAbsent) {
+          bucket.studentNoShow++;
+        }
+      } else {
+        if (tAtt && allStudentsAbsent) {
+          bucket.studentNoShow++;
+        }
+      }
+
+      if (!tAtt && !isClassCancelled && allStudentsAbsent) {
+        bucket.bothNoShow++;
+      }
+    });
+
+  return byDuration;
+}
+
+const groupData = tally('group');
+const privateData = tally('private');
+return { groupData, privateData };
+}
+
+function buildPrivateAveragesTable(data) {
+const studentStats = {};
+const teacherStats = {};
+
+for (const cls of Object.values(data)) {
+  if (cls.available_seats !== 1) continue; // Only private classes
+
+  const teacher = cls.teacher.username;
+  const tAttended = cls.teacher.attended;
+
+  if (teacher) {
+    teacherStats[teacher] = teacherStats[teacher] || {
+      total: 0, attended: 0, cancelled: 0,
+      cancelledByTeacher: 0, cancelledByStudent: 0, cancelledByAdmin: 0,
+      cancelledIntervalSum: 0, cancelledIntervalCount: 0,
+      teacherNoShow: 0, studentNoShow: 0,
+      tardinessSum: 0, tardinessCount: 0,
+      classDates: []
+    };
+    const t = teacherStats[teacher];
+    t.total++;
+    if (cls.teacher.attended) t.attended++;
+    if (cls.teacher.cancelled) t.teacherNoShow++;
+    if (cls.cancelledBy) t.cancelled++;
+    if (cls.cancelledByTeacher) t.cancelledByTeacher++;
+    if (cls.cancelledByStudent) t.cancelledByStudent++;
+    if (cls.cancelledByAdmin) t.cancelledByAdmin++;
+    if (cls.cancelledInterval !== '') {
+      t.cancelledIntervalSum += parseFloat(cls.cancelledInterval);
+      t.cancelledIntervalCount++;
+    }
+    if (typeof cls.teacher.tardiness === 'number') {
+      t.tardinessSum += cls.teacher.tardiness / 60;
+      t.tardinessCount++;
+    }
+
+    const allStudentsAbsent = cls.students.length > 0 && cls.students.every(s => !s.attended);
+    if (allStudentsAbsent) t.studentNoShow++;
+
+    t.classDates.push(new Date(cls.scheduledStart));
+  }
+
+  for (const student of cls.students) {
+    const username = student.username;
+    if (!username) continue;
+    studentStats[username] = studentStats[username] || {
+      total: 0, attended: 0, cancelled: 0,
+      cancelledByStudent: 0, cancelledByTeacher: 0, cancelledByAdmin: 0,
+      cancelledIntervalSum: 0, cancelledIntervalCount: 0,
+      enrolIntervalSum: 0, enrolIntervalCount: 0,
+      tardinessSum: 0, tardinessCount: 0,
+      studentNoShow: 0, teacherNoShow: 0,
+      classDates: []
+    };
+    const s = studentStats[username];
+    s.total++;
+    if (student.attended) s.attended++;
+    else s.studentNoShow++;
+
+    if (!tAttended) s.teacherNoShow++;
+
+    if (student.cancelled) {
+      s.cancelled++;
+      if (student.cancelledBy === username) s.cancelledByStudent++;
+      else if (student.cancelledBy === teacher) s.cancelledByTeacher++;
+      else if (student.cancelledBy) s.cancelledByAdmin++;
+
+      if (!isNaN(parseFloat(student.cancelledInterval))) {
+        s.cancelledIntervalSum += parseFloat(student.cancelledInterval);
+        s.cancelledIntervalCount++;
+      }
+    }
+
+    if (!isNaN(parseFloat(student.enrolmentInterval))) {
+      s.enrolIntervalSum += parseFloat(student.enrolmentInterval);
+      s.enrolIntervalCount++;
+    }
+
+    if (typeof student.tardiness === 'number') {
+      s.tardinessSum += student.tardiness / 60;
+      s.tardinessCount++;
+    }
+
+    s.classDates.push(new Date(cls.scheduledStart));
+  }
+}
+
+function calcAvg(statsMap) {
+  const values = Object.values(statsMap);
+  const avg = key => values.length ? (values.reduce((a, b) => a + (b[key] || 0), 0) / values.length).toFixed(2) : '0.00';
+  const avgDiv = (numKey, denomKey) =>
+    values.length
+      ? (values.reduce((a, b) => a + (b[denomKey] ? b[numKey] / b[denomKey] : 0), 0) / values.length).toFixed(2)
+      : '0.00';
+  const avgClassInterval = values.length
+    ? (
+        values.reduce((acc, val) => {
+          const dates = val.classDates.sort((a, b) => a - b);
+          if (dates.length < 2) return acc;
+          let sum = 0;
+          for (let i = 1; i < dates.length; i++) {
+            sum += (dates[i] - dates[i - 1]) / (1000 * 3600);
+          }
+          return acc + (sum / (dates.length - 1));
+        }, 0) / values.length
+      ).toFixed(2)
+    : '0.00';
+
+  return {
+    'Average Classes': avg('total'),
+    'Average Attended Classes': avg('attended'),
+    'Average Cancellations (Total)': avg('cancelled'),
+    'Average Cancellations by Student': avg('cancelledByStudent'),
+    'Average Cancellations by Teacher': avg('cancelledByTeacher'),
+    'Average Cancellations by Admin': avg('cancelledByAdmin'),
+    'Average Cancellation Interval (hours)': avgDiv('cancelledIntervalSum', 'cancelledIntervalCount'),
+    'Average Teacher No Shows': avg('teacherNoShow'),
+    'Average Student No Shows': avg('studentNoShow'),
+    'Average Tardinesss (min)': avgDiv('tardinessSum', 'tardinessCount'),
+    'Average Enrolment Interval (hours)': avgDiv('enrolIntervalSum', 'enrolIntervalCount'),
+    'Average Class Interval (hours)': avgClassInterval
+  };
+}
+
+const studentRow = calcAvg(studentStats);
+const teacherRow = calcAvg(teacherStats);
+
+const labels = Object.keys(studentRow);
+let html = '<table><thead><tr><th>Metric</th><th>Students</th><th>Teachers</th></tr></thead><tbody>';
+
+for (const label of labels) {
+  html += `<tr>
+    <th>${label}</th>
+    <td>${studentRow[label]}</td>
+    <td>${teacherRow[label]}</td>
+  </tr>`;
+}
+
+html += '</tbody></table>';
+return html;
+}
 
 
 
@@ -1231,7 +1340,15 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         courses=unique(Object.values(data).map(c=>c['course id']));
         companies=unique(Object.values(data).map(c=>c.company).filter(Boolean));
         document.getElementById('courseSelect').innerHTML=courses.map(id=>`<option>${id}</option>`).join('');
-        document.getElementById('companySelect').innerHTML='<option value="ALL">All</option>'+companies.map(id=>`<option>${id}</option>`).join('');
+        const hasCompanies = companies.length > 0;
+        // Populate company dropdown
+        const companySelect = document.getElementById('companySelect');
+        companySelect.innerHTML =
+          '<option value="ALL">All</option>' +
+          companies.map(id => `<option>${id}</option>`).join('');
+
+        // Disable company radio button if no companies
+        document.getElementById('companyRadio').disabled = !hasCompanies;
         // --- populate duration checkboxes ---
         const durations = [...new Set(
         Object.values(data)
@@ -1251,6 +1368,18 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
         }).join('');
         show('reportSelectorPanel');
       }catch(e){console.error(e);alert('Parsing error');}
+
+      validatedStudentUsernames = [];
+        Object.values(data).forEach(cls => {
+          (cls.students || []).forEach(s => {
+            if (s.username && !validatedStudentUsernames.includes(s.username)) {
+              validatedStudentUsernames.push(s.username);
+            }
+          });
+        });
+
+        show('reportSelectorPanel');
+
     });
     document.getElementById('newUploadBtn').addEventListener('click',()=>location.reload());
 
@@ -1396,11 +1525,33 @@ function buildStudentReport(processedData, { cancellationWindow, companyId }) {
       }
     });
 
-    document.getElementById('generateStudentReportBtn').addEventListener('click',()=>{
-      const s={ cancellationWindow:+document.getElementById('studentCancellationWindow').value, companyId:document.getElementById('companySelect').value };
-      const csv=buildStudentReport(data,s);
-      document.getElementById('studentReportTable').innerHTML=csvToTable(csv);
-      document.getElementById('downloadStudentReportBtn').onclick=()=>downloadCSV(csv,'student-report.csv');
+    document.getElementById('generateStudentReportBtn').addEventListener('click', () => {
+      // 1) Read the common settings
+      const cancellationWindow = +document.getElementById('studentCancellationWindow').value;
+      const companyId         = document.getElementById('companySelect').value;
+      
+      // 2) Determine which mode we're in
+      const filterMode = document.querySelector('input[name="studentSelection"]:checked').value;
+      
+      // 3) If in custom mode, collect only the VALID tags
+      let customList = [];
+      if (filterMode === 'custom') {
+        const tags = document.querySelectorAll('#customStudentTags .tag:not(.invalid)');
+        customList = Array.from(tags).map(el => el.dataset.username);
+      }
+
+      // 4) Build the CSV, passing our new flags
+      const csv = buildStudentReport(data, {
+        cancellationWindow,
+        companyId,
+        filterMode,   // 'all' | 'company' | 'custom'
+        customList    // array of validated usernames
+      });
+
+      // 5) Render as before
+      document.getElementById('studentReportTable').innerHTML = csvToTable(csv);
+      document.getElementById('downloadStudentReportBtn').onclick = () => 
+        downloadCSV(csv, 'student-report.csv');
       show('studentReportOutput');
     });
 
