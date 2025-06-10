@@ -858,6 +858,47 @@ function buildCourseDetailReport(processedData, courseId) {
   };
 }
 
+/**
+ * Builds a CSV for each student’s overview stats in a particular course.
+ */
+function buildCourseStudentOverviewCSV(processedData, courseId) {
+  // 1. Get all classes for this course
+  const classes = Object.values(processedData)
+    .filter((cls) => (cls.course_id || 'NO_ID') === courseId);
+
+  // 2. Tally per‐student stats
+  const stats = {}; // username → { enrolled, attended, noShow, cancelled }
+  classes.forEach((cls) => {
+    (cls.students || []).forEach((s) => {
+      const u = s.username;
+      if (!stats[u]) {
+        stats[u] = { enrolled: 0, attended: 0, noShow: 0, cancelled: 0 };
+      }
+      stats[u].enrolled += 1;
+      if (s.attended) {
+        stats[u].attended += 1;
+      } else if (s.cancelled) {
+        stats[u].cancelled += 1;
+      } else {
+        stats[u].noShow += 1;
+      }
+    });
+  });
+
+  // 3. Build CSV lines
+  const header = ['username', 'enrolled', 'attended', 'no_show', 'cancelled', 'attendance_rate'];
+  const rows = [header.join(',')];
+
+  Object.keys(stats).forEach((u) => {
+    const { enrolled, attended, noShow, cancelled } = stats[u];
+    const rate = ((attended / enrolled) * 100).toFixed(2) + '%';
+    // wrap username in quotes in case it contains commas
+    rows.push([`"${u}"`, enrolled, attended, noShow, cancelled, rate].join(','));
+  });
+
+  return rows.join('\n');
+}
+
 
 /* -----------------------------------------------------------------------------
    3.4 Student Report
@@ -1495,17 +1536,24 @@ document.getElementById('reportSelect').addEventListener('change', (e) => {
 
 /* ----------------------- Course Report: Toggle Course‐ID Dropdown ----------------------- */
 
-// Whenever the user clicks “Overview” vs “Detail” under Course Report, show or hide the <select>.
-document.querySelectorAll('input[name="courseType"]').forEach((radio) => {
-  radio.addEventListener('change', () => {
-    const wrapper = document.getElementById('courseSelectWrapper');
-    // If “Detail” is selected, remove .hidden; otherwise, add it back.
-    if ( document.querySelector('input[name="courseType"]:checked').value === 'detail' ) {
-      wrapper.classList.remove('hidden');
-    } else {
-      wrapper.classList.add('hidden');
-    }
-  });
+function updateCourseSelectVisibility() {
+  const wrapper = document.getElementById('courseSelectWrapper');
+  // grab the checked value into a local var (don’t reference an undefined `type`)
+  const selectedType = document.querySelector('input[name="courseType"]:checked').value;
+
+  if (selectedType === 'detail' || selectedType === 'fundae') {
+    wrapper.classList.remove('hidden');
+  } else {
+    wrapper.classList.add('hidden');
+  }
+}
+
+// run on initial page load
+updateCourseSelectVisibility();
+
+// re-run whenever any of the courseType radios change
+document.querySelectorAll('input[name="courseType"]').forEach(radio => {
+  radio.addEventListener('change', updateCourseSelectVisibility);
 });
 
 /* ----------------------- Generate Overview Report ----------------------- */
@@ -1657,6 +1705,7 @@ document.getElementById('generateTeacherReportBtn').addEventListener('click', ()
 
 document.getElementById('generateCourseReportBtn').addEventListener('click', () => {
   const courseType = document.querySelector('input[name="courseType"]:checked').value;
+  const selectedCourseId = document.getElementById('courseSelect').value;
 
   if (courseType === 'overview') {
     // Build overview of all courses
@@ -1665,18 +1714,39 @@ document.getElementById('generateCourseReportBtn').addEventListener('click', () 
     document.getElementById('downloadAllCoursesBtn').onclick = () =>
       downloadCSV(allCoursesCsv, 'courses-overview.csv');
     show('allCoursesOverviewReport');
-  } else {
-    // Build detail for a specific course
-    const selectedCourseId = document.getElementById('courseSelect').value;
-    const { infoCsv, classListCsv } = buildCourseDetailReport(data, selectedCourseId);
 
+  } else if (courseType === 'detail') {
+    // Build detail for a specific course
+    const { infoCsv, classListCsv } = buildCourseDetailReport(data, selectedCourseId);
     document.getElementById('courseInfoTable').innerHTML = csvToTable(infoCsv);
     document.getElementById('courseClassListTable').innerHTML = csvToTable(classListCsv);
-
     document.getElementById('downloadCourseInfoBtn').onclick = () =>
       downloadCSV(infoCsv, 'course-info.csv');
     document.getElementById('downloadCourseClassListBtn').onclick = () =>
-      downloadCSV(classListCsv, 'course-class.csv');
+      downloadCSV(classListCsv, 'course-classes.csv');
+
+    // clear the Fundae‐only table & button
+    document.getElementById('studentOverviewTable').innerHTML = '';
+    document.getElementById('downloadStudentOverviewBtn').onclick = null;
+
+    show('courseDetailedReport');
+
+  } else if (courseType === 'fundae') {
+     // Build detail + fundae for a specific course
+    // 1) same course‐info + class‐list
+    const { infoCsv, classListCsv } = buildCourseDetailReport(data, selectedCourseId);
+    document.getElementById('courseInfoTable').innerHTML = csvToTable(infoCsv);
+    document.getElementById('courseClassListTable').innerHTML = csvToTable(classListCsv);
+    document.getElementById('downloadCourseInfoBtn').onclick = () =>
+      downloadCSV(infoCsv, 'course-info.csv');
+    document.getElementById('downloadCourseClassListBtn').onclick = () =>
+      downloadCSV(classListCsv, 'course-classes.csv');
+
+    // 2) build & render the new student overview
+    const studentOverviewCsv = buildCourseStudentOverviewCSV(data, selectedCourseId);
+    document.getElementById('studentOverviewTable').innerHTML = csvToTable(studentOverviewCsv);
+    document.getElementById('downloadStudentOverviewBtn').onclick = () =>
+      downloadCSV(studentOverviewCsv, 'course-student-overview.csv');
 
     show('courseDetailedReport');
   }
