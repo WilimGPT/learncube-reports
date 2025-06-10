@@ -223,7 +223,8 @@
       <fieldset>
         <legend>Course Report Settings</legend>
         <label><input type="radio" name="courseType" value="overview" checked> Overview</label>
-        <label><input type="radio" name="courseType" value="detail"> Detail</label><br><br>
+        <label><input type="radio" name="courseType" value="detail"> Detail</label>
+        <label><input type="radio" name="courseType" value="fundae"> Fundae</label><br><br>
         <label id="courseSelectWrapper" class="hidden">Course: <select id="courseSelect"></select></label>
       </fieldset><br>
       <button id="generateCourseReportBtn">Generate Course Report</button>
@@ -295,10 +296,12 @@
         <div>
           <button id="downloadCourseInfoBtn">Download Course Info CSV</button>
           <button id="downloadCourseClassListBtn">Download Class List CSV</button>
+          <button id="downloadStudentOverviewBtn">Download Student Overview CSV</button>
         </div>
       </div>
       <div class="table-container" id="courseInfoTable"></div>
       <div class="table-container" id="courseClassListTable"></div>
+      <div class="table-container" id="studentOverviewTable"></div>
     </section>
 
     <section id="studentReportOutput" class="card hidden">
