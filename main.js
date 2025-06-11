@@ -476,131 +476,233 @@ function buildTeacherHourCountCSV(processedData, settings, simpleReport) {
  * @param {Object<string, Object>} processedData - Output from processData()
  * @returns {string} CSV string with header + one row per teacher
  */
-function buildTeacherOverviewCSV(processedData) {
-  const teachers = {};
+/**
+ * Builds CSV for private-class metrics per teacher.
+ */
+function buildTeacherPrivateClassesCSV(processedData) {
+  const stats = {};
 
-  // 1) Loop through each class to accumulate per-teacher stats
-  Object.keys(processedData).forEach((classSlug) => {
-    const cls = processedData[classSlug];
-    const teacherUsername = cls.teacher.username;
-    if (!teacherUsername) return;
+  Object.values(processedData).forEach((cls) => {
+    if (cls.available_seats !== 1) return; // skip non-private
+    const name = cls.teacher.username;
+    if (!name) return;
 
-    // Initialize teacher aggregate object if needed
-    if (!teachers[teacherUsername]) {
-      teachers[teacherUsername] = {
-        totalGroup: 0,
-        totalPrivate: 0,
-        attended: 0,
-        noShow: 0,
-        nonCancelled: 0,
-        cancellationByTeacher: 0,
-        cancellationByStudent: 0,
-        totalTardiness: 0,
-        tardinessCount: 0,
+    if (!stats[name]) {
+      stats[name] = {
+        totalBooked: 0,
+        cancelledByTeacher: 0,
+        cancelledByAdmin: 0,
+        cancelledByStudent: 0,
+        totalRemaining: 0,
+        teacherNoShows: 0,
+        studentNoShows: 0,
+        teacherTardinessSum: 0,
+        teacherTardinessCount: 0,
+        studentTardinessSum: 0,
+        studentTardinessCount: 0,
         ratingSum: 0,
-        ratingCount: 0
+        ratingCount: 0,
+        feedbackCount: 0
       };
     }
+    const s = stats[name];
+    s.totalBooked++;
 
-    const agg = teachers[teacherUsername];
-    const isPrivate = cls.available_seats === 1;
-    if (isPrivate) {
-      agg.totalPrivate++;
-    } else {
-      agg.totalGroup++;
+    // cancellations
+    if (cls.cancelledByTeacher) s.cancelledByTeacher++;
+    else if (cls.cancelledByStudent) s.cancelledByStudent++;
+    else if (cls.cancelledByAdmin)   s.cancelledByAdmin++;
+
+    // remaining & no-shows
+    if (!cls.cancelledBy) {
+      s.totalRemaining++;
+      if (!cls.teacher.attended) s.teacherNoShows++;
+      const allAbsent = cls.students.every((st) => !st.attended);
+      if (cls.teacher.attended && allAbsent) s.studentNoShows++;
     }
 
-    // Only count stats for non-cancelled classes
-    const classCancelled = Boolean(cls.cancelledBy);
-    if (!classCancelled) {
-      agg.nonCancelled++;
-      if (cls.teacher.attended) {
-        agg.attended++;
-      } else {
-        agg.noShow++;
+    // teacher tardiness
+    const tMin = cls.teacher.tardiness / 60;
+    s.teacherTardinessSum += tMin;
+    s.teacherTardinessCount++;
+
+    // students: tardiness, ratings, feedback
+    cls.students.forEach((st) => {
+      if (typeof st.tardiness === 'number') {
+        s.studentTardinessSum += st.tardiness / 60;
+        s.studentTardinessCount++;
       }
-    }
-
-    // Count cancellations by teacher (only if classType = private or group)
-    if (classCancelled && cls.cancelledBy.trim() === teacherUsername) {
-      agg.cancellationByTeacher++;
-    }
-
-    // Count cancellations by student (private only)
-    if (isPrivate && classCancelled) {
-      const studentCancelled = cls.students.some(
-        (s) => s.cancelled && s.cancelledBy === s.username
-      );
-      if (studentCancelled) {
-        agg.cancellationByStudent++;
+      const r = parseFloat(st.rating);
+      const hasFB = (st.feedback && st.feedback.trim()) || !isNaN(r);
+      if (!isNaN(r)) {
+        s.ratingSum += r;
+        s.ratingCount++;
       }
-    }
-
-    // Accumulate total tardiness (in minutes) for teacher
-    const tardinessMin = Math.round(cls.teacher.tardiness / 60);
-    agg.totalTardiness += tardinessMin;
-    agg.tardinessCount++;
-
-    // Accumulate ratings from all students in this class
-    cls.students.forEach((student) => {
-      const rating = parseFloat(student.rating);
-      if (!isNaN(rating)) {
-        agg.ratingSum += rating;
-        agg.ratingCount++;
-      }
+      if (hasFB) s.feedbackCount++;
     });
   });
 
-  // 2) Build header row for CSV
+  // build CSV
   const header = [
     'teacher',
-    'total group classes',
-    'total private classes',
-    'attendance rate',
-    'no show rate',
-    'cancellation by teacher rate',
-    'cancellation by student rate',
-    'average tardiness',
-    'average rating'
+    'total classes booked',
+    'cancelled by teacher',
+    'cancelled by admin',
+    'cancelled by student',
+    'total remaining classes',
+    'teacher no shows',
+    'student no shows',
+    'average teacher tardiness',
+    'average student tardiness',
+    'average rating',
+    'feedback rate'
   ];
-
   const rows = [header.join(',')];
 
-  // 3) Compute per-teacher rates and output each row
-  Object.keys(teachers).forEach((teacherUsername) => {
-    const agg = teachers[teacherUsername];
-    const attendanceRate = agg.nonCancelled
-      ? (agg.attended / agg.nonCancelled).toFixed(2)
+  Object.entries(stats).forEach(([name, s]) => {
+    const avgTardT = s.teacherTardinessCount
+      ? (s.teacherTardinessSum / s.teacherTardinessCount).toFixed(2)
       : '0.00';
-    const noShowRate = agg.nonCancelled
-      ? (agg.noShow / agg.nonCancelled).toFixed(02)
+    const avgTardS = s.studentTardinessCount
+      ? (s.studentTardinessSum / s.studentTardinessCount).toFixed(2)
       : '0.00';
-    const cancellationTeacherRate = agg.nonCancelled
-      ? (agg.cancellationByTeacher / agg.nonCancelled).toFixed(2)
+    const avgRating = s.ratingCount
+      ? (s.ratingSum / s.ratingCount).toFixed(2)
       : '0.00';
-    const cancellationStudentRate = agg.totalPrivate
-      ? (agg.cancellationByStudent / agg.totalPrivate).toFixed(2)
-      : '0.00';
-    const avgTardiness = agg.tardinessCount
-      ? (agg.totalTardiness / agg.tardinessCount).toFixed(2)
-      : '0.00';
-    const avgRating = agg.ratingCount
-      ? (agg.ratingSum / agg.ratingCount).toFixed(2)
+    const fbRate = s.totalBooked
+      ? ((s.feedbackCount / s.totalBooked) * 100).toFixed(2)
       : '0.00';
 
-    const row = [
-      teacherUsername,
-      agg.totalGroup,
-      agg.totalPrivate,
-      attendanceRate,
-      noShowRate,
-      cancellationTeacherRate,
-      cancellationStudentRate,
-      avgTardiness,
-      avgRating
-    ];
+    rows.push([
+      `"${name}"`,
+      s.totalBooked,
+      s.cancelledByTeacher,
+      s.cancelledByAdmin,
+      s.cancelledByStudent,
+      s.totalRemaining,
+      s.teacherNoShows,
+      s.studentNoShows,
+      avgTardT,
+      avgTardS,
+      avgRating,
+      fbRate
+    ].join(','));
+  });
 
-    rows.push(row.join(','));
+  return rows.join('\n');
+}
+
+/**
+ * Builds CSV for group-class metrics per teacher.
+ */
+function buildTeacherGroupClassesCSV(processedData) {
+  const stats = {};
+
+  Object.values(processedData).forEach((cls) => {
+    if (cls.available_seats <= 1) return; // skip private
+    const name = cls.teacher.username;
+    if (!name) return;
+
+    if (!stats[name]) {
+      stats[name] = {
+        totalBooked: 0,
+        cancelledByTeacher: 0,
+        cancelledByAdmin: 0,
+        totalRemaining: 0,
+        teacherNoShows: 0,
+        classStudentNoShowClasses: 0,
+        classStudentNoShowTotal: 0,
+        teacherTardinessSum: 0,
+        teacherTardinessCount: 0,
+        studentTardinessSum: 0,
+        studentTardinessCount: 0,
+        ratingSum: 0,
+        ratingCount: 0,
+        feedbackClassCount: 0
+      };
+    }
+    const s = stats[name];
+    s.totalBooked++;
+
+    if (cls.cancelledByTeacher) s.cancelledByTeacher++;
+    else if (cls.cancelledByAdmin)    s.cancelledByAdmin++;
+
+    if (!cls.cancelledBy) {
+      s.totalRemaining++;
+      if (!cls.teacher.attended) s.teacherNoShows++;
+      const anyNoShow = cls.students.some((st) => !st.attended && !st.cancelled);
+      if (anyNoShow) s.classStudentNoShowClasses++;
+    }
+
+    // total student no-shows
+    const noShowCount = cls.students.filter((st) => !st.attended && !st.cancelled).length;
+    s.classStudentNoShowTotal += noShowCount;
+
+    // teacher tardiness
+    const tMin = cls.teacher.tardiness / 60;
+    s.teacherTardinessSum += tMin;
+    s.teacherTardinessCount++;
+
+    cls.students.forEach((st) => {
+      if (typeof st.tardiness === 'number') {
+        s.studentTardinessSum += st.tardiness / 60;
+        s.studentTardinessCount++;
+      }
+      const r = parseFloat(st.rating);
+      const hasFB = (st.feedback && st.feedback.trim()) || !isNaN(r);
+      if (!isNaN(r)) {
+        s.ratingSum += r;
+        s.ratingCount++;
+      }
+      if (hasFB) s.feedbackClassCount++;
+    });
+  });
+
+  // build CSV
+  const header = [
+    'teacher',
+    'total classes booked',
+    'cancelled by teacher',
+    'cancelled by admin',
+    'total remaining classes',
+    'teacher no shows',
+    'student no shows (classes)',
+    'student no shows (total)',
+    'average teacher tardiness',
+    'average student tardiness',
+    'average rating',
+    'feedback rate'
+  ];
+  const rows = [header.join(',')];
+
+  Object.entries(stats).forEach(([name, s]) => {
+    const avgTardT = s.teacherTardinessCount
+      ? (s.teacherTardinessSum / s.teacherTardinessCount).toFixed(2)
+      : '0.00';
+    const avgTardS = s.studentTardinessCount
+      ? (s.studentTardinessSum / s.studentTardinessCount).toFixed(2)
+      : '0.00';
+    const avgRating = s.ratingCount
+      ? (s.ratingSum / s.ratingCount).toFixed(2)
+      : '0.00';
+    const fbRate = s.totalBooked
+      ? ((s.feedbackClassCount / s.totalBooked) * 100).toFixed(2)
+      : '0.00';
+
+    rows.push([
+      `"${name}"`,
+      s.totalBooked,
+      s.cancelledByTeacher,
+      s.cancelledByAdmin,
+      s.totalRemaining,
+      s.teacherNoShows,
+      s.classStudentNoShowClasses,
+      s.classStudentNoShowTotal,
+      avgTardT,
+      avgTardS,
+      avgRating,
+      fbRate
+    ].join(','));
   });
 
   return rows.join('\n');
@@ -1684,18 +1786,20 @@ document.getElementById('generateHourCountBtn').addEventListener('click', () => 
 /* ----------------------- Generate Teacher Report (Overview & Feedback) ----------------------- */
 
 document.getElementById('generateTeacherReportBtn').addEventListener('click', () => {
-  const overviewCsv = buildTeacherOverviewCSV(data);
+  const privateCsv = buildTeacherPrivateClassesCSV(data);
+  const groupCsv   = buildTeacherGroupClassesCSV(data);
   const feedbackCsv = buildTeacherFeedbackCSV(data);
 
-  // Render tables
-  document.getElementById('overviewTable').innerHTML = csvToTable(overviewCsv);
-  document.getElementById('feedbackTable').innerHTML = csvToTable(feedbackCsv);
+  document.getElementById('teacherPrivateTable').innerHTML = csvToTable(privateCsv);
+  document.getElementById('teacherGroupTable').innerHTML   = csvToTable(groupCsv);
+  document.getElementById('feedbackTable').innerHTML       = csvToTable(feedbackCsv);
 
-  // Wire download buttons
-  document.getElementById('downloadOverviewBtn').onclick = () =>
-    downloadCSV(overviewCsv, 'overview.csv');
-  document.getElementById('downloadFeedbackBtn').onclick = () =>
-    downloadCSV(feedbackCsv, 'feedback.csv');
+  document.getElementById('downloadTeacherPrivateBtn').onclick = () => 
+    downloadCSV(privateCsv, 'teacher-private-classes.csv');
+  document.getElementById('downloadTeacherGroupBtn').onclick = () => 
+    downloadCSV(groupCsv,   'teacher-group-classes.csv');
+  document.getElementById('downloadFeedbackBtn').onclick     = () => 
+    downloadCSV(feedbackCsv, 'teacher-feedback.csv');
 
   show('teacherReportOutput');
 });
