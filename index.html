@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -275,11 +274,16 @@
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <strong>Teacher Report</strong>
         <div>
-          <button id="downloadOverviewBtn">Download Overview CSV</button>
+          <button id="downloadTeacherPrivateBtn">Download Private Classes CSV</button>
+          <button id="downloadTeacherGroupBtn">Download Group Classes CSV</button>
           <button id="downloadFeedbackBtn">Download Feedback CSV</button>
         </div>
       </div>
-      <div class="table-container" id="overviewTable"></div>
+      <div style="margin-top:1rem;"><strong>Private Classes</strong></div>
+      <div class="table-container" id="teacherPrivateTable"></div>
+      <div style="margin-top:1rem;"><strong>Group Classes</strong></div>
+      <div class="table-container" id="teacherGroupTable"></div>
+      <div style="margin-top:1rem;"><strong>Feedback</strong></div>
       <div class="table-container" id="feedbackTable"></div>
     </section>
 
