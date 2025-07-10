@@ -177,6 +177,7 @@
         <option value="teacher_report">Teacher Report</option>
         <option value="course_report">Course Report</option>
         <option value="student_report">Student / Company Report</option>
+        <option value="class_list">Class List</option>
       </select></label>
     </section>
 
@@ -256,6 +257,10 @@
       </fieldset><br>
 
       <button id="generateStudentReportBtn">Generate Student Report</button>
+    </section>
+
+    <section id="classListPanel" class="card hidden">
+      <button id="generateClassListBtn">Generate Class List</button>
     </section>
 
     <!-- Output Sections -->
@@ -339,6 +344,27 @@
       <div class="table-container" id="privateAveragesTable"></div>
 
 
+    </section>
+
+    <section id="classListReportOutput" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong>Class List Report</strong>
+        <div>
+          <button id="downloadPrivateClassListBtn">Download Private CSV</button>
+          <button id="downloadGroupClassListBtn">Download Group CSV</button>
+        </div>
+      </div>
+
+      <!-- Private classes table -->
+       <strong>Private Classes</strong>
+      <div class="table-container" id="classListPrivateTable"></div>
+  
+
+      <hr style="margin:2rem 0;">
+
+      <!-- Group classes table -->
+       <strong>Group Classes</strong>
+      <div class="table-container" id="classListGroupTable"></div>
     </section>
 
 
