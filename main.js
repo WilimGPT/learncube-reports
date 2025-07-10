@@ -129,6 +129,11 @@ function processData(classesData, participantsData) {
     const scheduledStart = cs[0]; // e.g., "2023-01-15 10:00:00"
     const scheduledEnd = cs[1];   // e.g., "2023-01-15 11:00:00"
     const scheduledDuration = timestampDiff(cs[0], cs[1]); // in seconds
+    const actualDuration = parseInt(cs[4], 10) * 60;
+    const description = cs[9] || '';
+    const subject = cs[11] || '';
+    const level = cs[12] || '';
+    const teacherSummary = cs[14] || '';
     const cancelledBy = cs[22] || '';    // Who cancelled this class (username or admin)
     const cancelledTime = cs[23] || '';  // When the class was cancelled (timestamp)
 
@@ -136,6 +141,11 @@ function processData(classesData, participantsData) {
     const cls = {
       scheduledStart,                      // Column 0
       scheduledDuration,                   // Computed from Column 0 & 1
+      actualDuration,
+      description,
+      subject,
+      level,
+      teacherSummary,
       company: cs[5],                      // Column 5
       course_id: cs[29],                   // Column 29
       available_seats: parseInt(cs[10], 10), // Column 10
@@ -1519,12 +1529,14 @@ const panels = [
   'teacherReportPanel',
   'courseReportSettings',
   'studentReportSettings',
+  'classListPanel', 
   'hourCountReportOutput',
   'teacherReportOutput',
   'allCoursesOverviewReport',
   'courseDetailedReport',
   'studentReportOutput',
-  'overviewReportOutput'
+  'overviewReportOutput',
+  'classListReportOutput'
 ];
 
 /*
@@ -1633,6 +1645,8 @@ document.getElementById('reportSelect').addEventListener('change', (e) => {
   else if (v === 'teacher_report') show('teacherReportPanel');
   else if (v === 'course_report') show('courseReportSettings');
   else if (v === 'student_report') show('studentReportSettings');
+  else if (v === 'student_report')        show('studentReportSettings');
+  else if (v === 'class_list')            show('classListPanel');
   else show('reportSelectorPanel');
 });
 
@@ -1955,6 +1969,134 @@ document.getElementById('generateStudentReportBtn').addEventListener('click', ()
 
   show('studentReportOutput');
 });
+
+
+/* ----------------------- Generate Class List Report ----------------------- */
+
+document.getElementById('generateClassListBtn').addEventListener('click', () => {
+  // 1) Split into private vs group
+  const allClasses = data || {};
+  const privateClasses = Object.values(allClasses).filter(c => c.available_seats === 1);
+  const groupClasses   = Object.values(allClasses).filter(c => c.available_seats > 1);
+
+  // 2) Helper to format scheduledStart
+  function formatDateTime(ts) {
+    const dt = new Date(ts.replace(' ', 'T'));
+    return {
+      date: dt.toLocaleDateString(),
+      time: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+  }
+
+  // 3) Build Private CSV
+  const privateHeader = [
+    'Date','Time','Scheduled Duration','Actual Duration','Status','Company',
+    'Subject','Level','description','Teacher','Teacher Attended',
+    'Teacher Tardiness','teacher summary','Student','Student Attended',
+    'Student Tardiness','class feedback','class rating'
+  ];
+  const privateRows = [ privateHeader.join(',') ];
+  privateClasses.forEach(cls => {
+    cls.students.forEach(student => {
+      const { date, time } = formatDateTime(cls.scheduledStart);
+      const status = (cls.cancelledByStudent || cls.cancelledByTeacher || cls.cancelledByAdmin)
+                     ? 'cancelled' : 'completed';
+      const teacherAttended = cls.teacher.attended ? 'true' : '';
+      const studentAttended = student.attended   ? 'true' : '';
+      privateRows.push([
+        date,
+        time,
+        (cls.scheduledDuration/60).toString(),
+        (cls.actualDuration/60).toString(),
+        status,
+        cls.company,
+        cls.subject,
+        cls.level,
+        `"${cls.description}"`,
+        cls.teacher.username,
+        teacherAttended,
+        cls.teacher.tardiness ? (cls.teacher.tardiness/60).toString() : '',
+        `"${cls.teacherSummary}"`,
+        student.username,
+        studentAttended,
+        student.tardiness ? (student.tardiness/60).toString() : '',
+        `"${student.feedback.replace(/\"/g,'""')}"`,
+        student.rating
+      ].join(','));
+    });
+  });
+  const privateCsv = privateRows.join('\n');
+
+  // 4) Build Group CSV
+  const groupHeader = [
+    'Date','Time','Scheduled Duration','Actual Duration','Status','Company',
+    'Subject','Level','description','Teacher','Teacher Attended',
+    'Teacher Tardiness','teacher summary','Seats','Students Enrolled',
+    'Students Attended','Students','class feedback','class rating'
+  ];
+  const groupRows = [ groupHeader.join(',') ];
+  groupClasses.forEach(cls => {
+    const { date, time } = formatDateTime(cls.scheduledStart);
+    const status = (cls.cancelledByStudent || cls.cancelledByTeacher || cls.cancelledByAdmin)
+                   ? 'cancelled' : 'completed';
+    const seats           = cls.available_seats;
+    const studentsEnrolled= cls.students.length;
+    const studentsAttended= cls.students.filter(s => s.attended).length;
+    const studentNames    = cls.students.map(s => s.username).join('; ');
+    const allFeedback     = cls.students
+                              .map(s => s.feedback.trim())
+                              .filter(f => f)
+                              .map(f => f.replace(/\"/g,'""'))
+                              .map(f => `"${f}"`)
+                              .join(' | ');
+    
+    const ratingsArr = cls.students
+      .map(s => parseFloat(s.rating))
+      .filter(r => !isNaN(r));
+    // compute average (2 decimals) or blank if none
+    const avgRating = ratingsArr.length
+      ? (ratingsArr.reduce((sum, r) => sum + r, 0) / ratingsArr.length).toFixed(2)
+      : '';
+    const teacherAttended = cls.teacher.attended ? 'true' : '';
+    groupRows.push([
+      date,
+      time,
+      (cls.scheduledDuration/60).toString(),
+      (cls.actualDuration/60).toString(),
+      status,
+      cls.company,
+      cls.subject,
+      cls.level,
+      `"${cls.description}"`,
+      cls.teacher.username,
+      teacherAttended,
+      cls.teacher.tardiness ? (cls.teacher.tardiness/60).toString() : '',
+      `"${cls.teacherSummary}"`,
+      seats,
+      studentsEnrolled,
+      studentsAttended,
+      `"${studentNames}"`,
+      allFeedback,
+      avgRating
+    ].join(','));
+  });
+  const groupCsv = groupRows.join('\n');
+
+  // 5) Render HTML tables
+  document.getElementById('classListPrivateTable').innerHTML = csvToTable(privateCsv);
+  document.getElementById('classListGroupTable').innerHTML   = csvToTable(groupCsv);
+
+  // 6) Wire up downloads
+  document.getElementById('downloadPrivateClassListBtn').onclick = () =>
+    downloadCSV(privateCsv, 'class-list-private.csv');
+  document.getElementById('downloadGroupClassListBtn').onclick = () =>
+    downloadCSV(groupCsv,   'class-list-group.csv');
+
+  // 7) Show result panel
+  show('classListReportOutput');
+});
+
+
 
 
 /* ----------------------- Utility Functions ----------------------- */
