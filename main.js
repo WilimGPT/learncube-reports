@@ -159,6 +159,8 @@ function processData(classesData, participantsData) {
       students: []                         // Array of student objects (populated below)
     };
 
+    cls.slug = slug;
+
     // 1. Gather participants rows for this class
     const participantsRows = participantsData.filter((p) => p[2] === slug);
 
@@ -174,6 +176,8 @@ function processData(classesData, participantsData) {
 
       return {
         username: pr[4],              // Column 4
+        firstName: pr[5],   // Column 5
+        lastName: pr[6],  
         attended: parseBoolean(pr[10]), // Column 10: 'true'/'false'
         tardiness: clampTardiness(
           timestampDiff(pr[3], pr[11]), // Column 3 (scheduledStart) vs Column 11 (actual join)
@@ -201,6 +205,8 @@ function processData(classesData, participantsData) {
     if (teacherRow) {
       cls.teacher = {
         username: teacherRow[4], // Column 4
+        firstName: teacherRow[5],     // Column 5
+        lastName: teacherRow[6],
         attended: parseBoolean(teacherRow[10]), // Column 10
         tardiness: clampTardiness(
           timestampDiff(teacherRow[3], teacherRow[11]), // Scheduled vs actual join
@@ -1973,26 +1979,107 @@ document.getElementById('generateStudentReportBtn').addEventListener('click', ()
 
 /* ----------------------- Generate Class List Report ----------------------- */
 
-document.getElementById('generateClassListBtn').addEventListener('click', () => {
-  // 1) Split into private vs group
-  const allClasses = data || {};
-  const privateClasses = Object.values(allClasses).filter(c => c.available_seats === 1);
-  const groupClasses   = Object.values(allClasses).filter(c => c.available_seats > 1);
+// Helper to format date/time
+function formatDateTime(ts) {
+  const dt = new Date(ts.replace(' ', 'T'));
+  return {
+    date: dt.toLocaleDateString(),
+    time: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  };
+}
 
-  // 2) Helper to format scheduledStart
-  function formatDateTime(ts) {
-    const dt = new Date(ts.replace(' ', 'T'));
-    return {
-      date: dt.toLocaleDateString(),
-      time: dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-  }
+// Helper to build "by student" CSV
+function buildClassListByStudentTable(data) {
+  const header = [
+    'Date','Time','Scheduled Duration','Actual Duration','Status','Company',
+    'Subject','Level','Description','Class Slug','Group Class',
+    'Student Username','Student Name','Student Attended','Student Tardiness',
+    'Class Feedback','Class Rating',
+    'Teacher Username','Teacher Name','Teacher Attended','Teacher Tardiness','Teacher Summary'
+  ];
+  const rows = [ header.join(',') ];
 
-  // 3) Build Private CSV
+  Object.values(data).forEach(cls => {
+    const { teacher } = cls;
+    const teacherName = (teacher.firstName ? teacher.firstName : '') + ' ' + (teacher.lastName ? teacher.lastName : '');
+    const teacherUsername = teacher.username || '';
+    const teacherAttended = teacher.attended ? 'true' : '';
+    const teacherTardiness = teacher.tardiness ? (teacher.tardiness/60).toString() : '';
+    const teacherSummary = cls.teacherSummary || '';
+    const isGroup = (cls.available_seats && cls.available_seats > 1) ? 'true' : 'false';
+
+    const dt = new Date(cls.scheduledStart.replace(' ', 'T'));
+    const date = dt.toLocaleDateString();
+    const time = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const status = (cls.cancelledByStudent || cls.cancelledByTeacher || cls.cancelledByAdmin)
+                    ? 'cancelled' : 'completed';
+
+    (cls.students || []).forEach(student => {
+      const studentName = (student.firstName ? student.firstName : '') + ' ' + (student.lastName ? student.lastName : '');
+      const studentUsername = student.username || '';
+      const studentAttended = student.attended ? 'true' : '';
+      const studentTardiness = student.tardiness ? (student.tardiness/60).toString() : '';
+      const feedback = student.feedback ? student.feedback.replace(/\"/g,'""') : '';
+      const rating = student.rating || '';
+
+      rows.push([
+        date,
+        time,
+        (cls.scheduledDuration/60).toString(),
+        (cls.actualDuration/60).toString(),
+        status,
+        cls.company,
+        cls.subject,
+        cls.level,
+        `"${cls.description}"`,
+        cls.slug,
+        isGroup,
+        studentUsername,
+        studentName,
+        studentAttended,
+        studentTardiness,
+        `"${feedback}"`,
+        rating,
+        teacherUsername,
+        teacherName,
+        teacherAttended,
+        teacherTardiness,
+        `"${teacherSummary}"`
+      ].join(','));
+    });
+  });
+
+  return rows.join('\n');
+}
+
+// 1. Toggle setup (OUTSIDE your generate handler)
+  let classListMode = 'by_class';
+
+  document.getElementById('classListByClassBtn').addEventListener('click', () => {
+    classListMode = 'by_class';
+    document.getElementById('classListByClassBtn').classList.add('active');
+    document.getElementById('classListByStudentBtn').classList.remove('active');
+  });
+  document.getElementById('classListByStudentBtn').addEventListener('click', () => {
+    classListMode = 'by_student';
+    document.getElementById('classListByClassBtn').classList.remove('active');
+    document.getElementById('classListByStudentBtn').classList.add('active');
+  });
+
+  // 2. Main handler
+  document.getElementById('generateClassListBtn').addEventListener('click', () => {
+    const mode = classListMode;
+
+
+  // Prepare filtered lists
+  const privateClasses = Object.values(data).filter(cls => cls.available_seats === 1);
+  const groupClasses = Object.values(data).filter(cls => cls.available_seats > 1);
+
+  // Build Private Classes CSV
   const privateHeader = [
     'Date','Time','Scheduled Duration','Actual Duration','Status','Company',
-    'Subject','Level','description','Teacher','Teacher Attended',
-    'Teacher Tardiness','teacher summary','Student','Student Attended',
+    'Subject','Level','description','Class Slug','Teacher Username','Teacher Name','Teacher Attended',
+    'Teacher Tardiness','teacher summary','Student Username','Student Name','Student Attended',
     'Student Tardiness','class feedback','class rating'
   ];
   const privateRows = [ privateHeader.join(',') ];
@@ -2002,7 +2089,7 @@ document.getElementById('generateClassListBtn').addEventListener('click', () => 
       const status = (cls.cancelledByStudent || cls.cancelledByTeacher || cls.cancelledByAdmin)
                      ? 'cancelled' : 'completed';
       const teacherAttended = cls.teacher.attended ? 'true' : '';
-      const studentAttended = student.attended   ? 'true' : '';
+      const studentAttended = student.attended ? 'true' : '';
       privateRows.push([
         date,
         time,
@@ -2013,47 +2100,48 @@ document.getElementById('generateClassListBtn').addEventListener('click', () => 
         cls.subject,
         cls.level,
         `"${cls.description}"`,
+        cls.slug,
         cls.teacher.username,
+        (cls.teacher.firstName ? cls.teacher.firstName : '') + ' ' + (cls.teacher.lastName ? cls.teacher.lastName : ''),
         teacherAttended,
         cls.teacher.tardiness ? (cls.teacher.tardiness/60).toString() : '',
         `"${cls.teacherSummary}"`,
         student.username,
+        (student.firstName ? student.firstName : '') + ' ' + (student.lastName ? student.lastName : ''),
         studentAttended,
         student.tardiness ? (student.tardiness/60).toString() : '',
-        `"${student.feedback.replace(/\"/g,'""')}"`,
+        `"${student.feedback ? student.feedback.replace(/\"/g,'""') : ''}"`,
         student.rating
       ].join(','));
     });
   });
   const privateCsv = privateRows.join('\n');
 
-  // 4) Build Group CSV
+  // Build Group Classes CSV
   const groupHeader = [
     'Date','Time','Scheduled Duration','Actual Duration','Status','Company',
-    'Subject','Level','description','Teacher','Teacher Attended',
+    'Subject','Level','description','Class Slug','Teacher Username','Teacher Name','Teacher Attended',
     'Teacher Tardiness','teacher summary','Seats','Students Enrolled',
-    'Students Attended','Students','class feedback','class rating'
+    'Students Attended','Student Usernames','class feedback','class rating'
   ];
   const groupRows = [ groupHeader.join(',') ];
   groupClasses.forEach(cls => {
     const { date, time } = formatDateTime(cls.scheduledStart);
     const status = (cls.cancelledByStudent || cls.cancelledByTeacher || cls.cancelledByAdmin)
                    ? 'cancelled' : 'completed';
-    const seats           = cls.available_seats;
-    const studentsEnrolled= cls.students.length;
-    const studentsAttended= cls.students.filter(s => s.attended).length;
-    const studentNames    = cls.students.map(s => s.username).join('; ');
-    const allFeedback     = cls.students
-                              .map(s => s.feedback.trim())
-                              .filter(f => f)
-                              .map(f => f.replace(/\"/g,'""'))
-                              .map(f => `"${f}"`)
-                              .join(' | ');
-    
+    const seats = cls.available_seats;
+    const studentsEnrolled = cls.students.length;
+    const studentsAttended = cls.students.filter(s => s.attended).length;
+    const studentNames = cls.students.map(s => s.username).join('; ');
+    const allFeedback = cls.students
+      .map(s => (s.feedback || '').trim())
+      .filter(f => f)
+      .map(f => f.replace(/\"/g,'""'))
+      .map(f => `"${f}"`)
+      .join(' | ');
     const ratingsArr = cls.students
       .map(s => parseFloat(s.rating))
       .filter(r => !isNaN(r));
-    // compute average (2 decimals) or blank if none
     const avgRating = ratingsArr.length
       ? (ratingsArr.reduce((sum, r) => sum + r, 0) / ratingsArr.length).toFixed(2)
       : '';
@@ -2068,7 +2156,9 @@ document.getElementById('generateClassListBtn').addEventListener('click', () => 
       cls.subject,
       cls.level,
       `"${cls.description}"`,
+      cls.slug,
       cls.teacher.username,
+      (cls.teacher.firstName ? cls.teacher.firstName : '') + ' ' + (cls.teacher.lastName ? cls.teacher.lastName : ''),
       teacherAttended,
       cls.teacher.tardiness ? (cls.teacher.tardiness/60).toString() : '',
       `"${cls.teacherSummary}"`,
@@ -2082,19 +2172,47 @@ document.getElementById('generateClassListBtn').addEventListener('click', () => 
   });
   const groupCsv = groupRows.join('\n');
 
-  // 5) Render HTML tables
+  // BY STUDENT TABLE
+  const byStudentCsv = buildClassListByStudentTable(data);
+
+  // ---- Render the right tables according to mode ----
+
+  // Set table HTMLs
   document.getElementById('classListPrivateTable').innerHTML = csvToTable(privateCsv);
   document.getElementById('classListGroupTable').innerHTML   = csvToTable(groupCsv);
+  document.getElementById('classListByStudentTable').innerHTML = csvToTable(byStudentCsv);
+  
+  // The by-student section is its own wrapper, toggle its display
+  document.getElementById('classListByStudentSection').style.display = (mode === 'by_student') ? '' : 'none';
 
-  // 6) Wire up downloads
+  // Toggle the visibility of download buttons as well
+  document.getElementById('downloadPrivateClassListBtn').style.display = (mode === 'by_class') ? '' : 'none';
+  document.getElementById('downloadGroupClassListBtn').style.display = (mode === 'by_class') ? '' : 'none';
+  document.getElementById('downloadByStudentClassListBtn').style.display = (mode === 'by_student') ? '' : 'none';
+
+  // Toggle private/group section visibility (including headers/hr) by mode
+  document.getElementById('privateClassSection').style.display = (mode === 'by_class') ? '' : 'none';
+  document.getElementById('groupClassSection').style.display = (mode === 'by_class') ? '' : 'none';
+  document.getElementById('classListHR').style.display = (mode === 'by_class') ? '' : 'none';
+
+  // Toggle by-student section
+  document.getElementById('classListByStudentSection').style.display = (mode === 'by_student') ? '' : 'none';
+
+  // Download buttons
   document.getElementById('downloadPrivateClassListBtn').onclick = () =>
     downloadCSV(privateCsv, 'class-list-private.csv');
   document.getElementById('downloadGroupClassListBtn').onclick = () =>
     downloadCSV(groupCsv,   'class-list-group.csv');
+  const byStudentBtn = document.getElementById('downloadByStudentClassListBtn');
+  if (byStudentBtn) {
+    byStudentBtn.onclick = () =>
+      downloadCSV(byStudentCsv, 'class-list-by-student.csv');
+  }
 
-  // 7) Show result panel
+  // Show result panel
   show('classListReportOutput');
 });
+
 
 
 
