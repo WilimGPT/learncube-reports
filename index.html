@@ -260,6 +260,10 @@
     </section>
 
     <section id="classListPanel" class="card hidden">
+      <div style="margin-bottom: 1rem;">
+        <button id="classListByClassBtn" class="active">By Class</button>
+        <button id="classListByStudentBtn" >By Student</button>
+      </div>
       <button id="generateClassListBtn">Generate Class List</button>
     </section>
 
@@ -346,25 +350,38 @@
 
     </section>
 
+
+    
+
     <section id="classListReportOutput" class="card hidden">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <strong>Class List Report</strong>
         <div>
           <button id="downloadPrivateClassListBtn">Download Private CSV</button>
           <button id="downloadGroupClassListBtn">Download Group CSV</button>
+          <button id="downloadByStudentClassListBtn">Download By Student CSV</button>
         </div>
       </div>
 
-      <!-- Private classes table -->
-       <strong>Private Classes</strong>
-      <div class="table-container" id="classListPrivateTable"></div>
-  
+      <!-- Private classes header/table -->
+      <div id="privateClassSection">
+        <strong>Private Classes</strong>
+        <div class="table-container" id="classListPrivateTable"></div>
+      </div>
 
-      <hr style="margin:2rem 0;">
+      <hr id="classListHR" style="margin:2rem 0;">
 
-      <!-- Group classes table -->
-       <strong>Group Classes</strong>
-      <div class="table-container" id="classListGroupTable"></div>
+      <!-- Group classes header/table -->
+      <div id="groupClassSection">
+        <strong>Group Classes</strong>
+        <div class="table-container" id="classListGroupTable"></div>
+      </div>
+
+      <!-- By Student classes table -->
+      <div id="classListByStudentSection" style="display:none;">
+        <strong>Classes By Student</strong>
+        <div class="table-container" id="classListByStudentTable"></div>
+      </div>
     </section>
 
 
