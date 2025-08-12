@@ -194,7 +194,8 @@ function processData(classesData, participantsData) {
           ? (timestampDiff(enrolledAt, scheduledStart) / 3600).toFixed(02)
           : '',
         rating: pr[15],   // Column 15: rating (string)
-        feedback: pr[16]  // Column 16: feedback (string)
+        feedback: pr[16],  // Column 16: feedback (string)
+        joinTime: pr[11] || '',           // Column 11: actual join timestamp
       };
     });
 
@@ -212,6 +213,7 @@ function processData(classesData, participantsData) {
           timestampDiff(teacherRow[3], teacherRow[11]), // Scheduled vs actual join
           scheduledDuration
         ),
+        joinTime: teacherRow[11] || '',
         cancelled: parseBoolean(teacherRow[12]) // Column 12
       };
     }
@@ -976,6 +978,140 @@ function buildCourseDetailReport(processedData, courseId) {
   };
 }
 
+
+function buildCourseDetailReportANPAL(processedData, courseId) {
+  // Reuse the same filtering and aggregates as the standard detail report
+  const classes = Object.values(processedData)
+    .filter((cls) => (cls.course_id || 'NO_ID') === courseId)
+    .sort((a, b) => new Date(a.scheduledStart) - new Date(b.scheduledStart));
+
+  if (!classes.length) {
+    return { infoCsv: '', classListCsv: '', uniqueStudents: [] };
+  }
+
+  // ===== Info CSV (unchanged from standard) =====
+  const teachers = unique(classes.map((cls) => cls.teacher.username).filter(Boolean));
+  let allStudentUsernames = [];
+  let attendedCount = 0;
+  let totalStudentParticipations = 0;
+
+  classes.forEach((cls) => {
+    (cls.students || []).forEach((student) => {
+      allStudentUsernames.push(student.username);
+      totalStudentParticipations++;
+      if (student.attended) attendedCount++;
+    });
+  });
+
+  const uniqueStudents = unique(allStudentUsernames);
+  const attendanceRate = totalStudentParticipations
+    ? Math.round((attendedCount / totalStudentParticipations) * 100)
+    : '';
+
+  const infoHeader = [
+    'course ID',
+    'teacher(s)',
+    'start date',
+    'end date',
+    'level',
+    'subject',
+    'course description',
+    'seats',
+    'students enrolled',
+    'total classes',
+    'attendance rate (%)'
+  ];
+  const firstClass = classes[0];
+  const infoRow = [
+    `"${courseId}"`,
+    `"${teachers.join(' - ')}"`,
+    `"${classes[0].scheduledStart}"`,
+    `"${classes[classes.length - 1].scheduledStart}"`,
+    `"${firstClass.level || ''}"`,
+    `"${firstClass.subject || ''}"`,
+    `"${firstClass['course description'] || ''}"`,
+    `"${firstClass.available_seats || ''}"`,
+    uniqueStudents.length,
+    classes.length,
+    attendanceRate
+  ];
+  const infoCsv = [infoHeader.join(','), infoRow.join(',')].join('\n');
+
+  // ===== Class List CSV (ANPAL variant) =====
+  // Helpers
+  const toLocalDate = (ts) => {
+    const dt = new Date(ts.replace(' ', 'T'));
+    return dt.toLocaleDateString();
+  };
+  const toLocalTime = (ts) => {
+    const dt = new Date(ts.replace(' ', 'T'));
+    return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+  const addSeconds = (ts, seconds) => {
+    const dt = new Date(ts.replace(' ', 'T'));
+    const end = new Date(dt.getTime() + (seconds || 0) * 1000);
+    return end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  // Header: ANPAL replaces duration with Class End Time and adds extra columns
+  const classListHeader = [
+    'class number',
+    'date',
+    'time',
+    'class end time (actual)',
+    'status',
+    'class ID',
+    'teacher username',
+    'teacher name',
+    'teacher attended time',
+    ...uniqueStudents.map((u) => `"${u}"`)
+  ];
+  const classListRows = [classListHeader.join(',')];
+
+  classes.forEach((cls, idx) => {
+    const date = toLocalDate(cls.scheduledStart);
+    const time = toLocalTime(cls.scheduledStart);
+    const endTime = addSeconds(cls.scheduledStart, cls.actualDuration); // actual end
+    const status = cls.cancelledBy ? 'cancelled' : 'completed';
+    const teacherFullName = `${cls.teacher.firstName ? cls.teacher.firstName : ''} ${cls.teacher.lastName ? cls.teacher.lastName : ''}`.trim();
+    const teacherJoin = cls.teacher.joinTime ? toLocalTime(cls.teacher.joinTime) : '';
+
+    // For each unique student, show:
+    // - join time if attended & we have a joinTime
+    // - "cancelled" if cancelled
+    // - "no show" otherwise
+    const rowByStudent = uniqueStudents.map((username) => {
+      const s = (cls.students || []).find((st) => st.username === username);
+      if (!s) return '';
+      if (s.cancelled) return 'cancelled';
+      if (s.attended) {
+        return s.joinTime ? toLocalTime(s.joinTime) : 'attended';
+      }
+      return 'no show';
+    });
+
+    classListRows.push([
+      `Class ${idx + 1}`,
+      date,
+      time,
+      endTime,
+      status,
+      cls.slug,
+      cls.teacher.username || '',
+      `"${teacherFullName}"`,
+      teacherJoin,
+      ...rowByStudent
+    ].join(','));
+  });
+
+  return {
+    infoCsv,
+    classListCsv: classListRows.join('\n'),
+    uniqueStudents
+  };
+}
+
+
 /**
  * Builds a CSV for each student’s overview stats in a particular course.
  */
@@ -1557,6 +1693,19 @@ function show(id) {
   document.getElementById(id).classList.remove('hidden');
 }
 
+// Keep the Course Report Settings visible while showing a specific output panel
+function showCourseReport(id) {
+  panels.forEach((p) => {
+    const el = document.getElementById(p);
+    if (!el) return;
+    if (p === 'courseReportSettings' || p === id) {
+      el.classList.remove('hidden');   // keep settings + requested output visible
+    } else {
+      el.classList.add('hidden');      // hide everything else
+    }
+  });
+}
+
 
 /* --------------------------- Upload & Parsing --------------------------- */
 
@@ -1660,10 +1809,9 @@ document.getElementById('reportSelect').addEventListener('change', (e) => {
 
 function updateCourseSelectVisibility() {
   const wrapper = document.getElementById('courseSelectWrapper');
-  // grab the checked value into a local var (don’t reference an undefined `type`)
   const selectedType = document.querySelector('input[name="courseType"]:checked').value;
 
-  if (selectedType === 'detail' || selectedType === 'fundae') {
+  if (selectedType === 'detail' || selectedType === 'fundae' || selectedType === 'anpal') {
     wrapper.classList.remove('hidden');
   } else {
     wrapper.classList.add('hidden');
@@ -1837,7 +1985,7 @@ document.getElementById('generateCourseReportBtn').addEventListener('click', () 
     document.getElementById('allCoursesTable').innerHTML = csvToTable(allCoursesCsv);
     document.getElementById('downloadAllCoursesBtn').onclick = () =>
       downloadCSV(allCoursesCsv, 'courses-overview.csv');
-    show('allCoursesOverviewReport');
+    showCourseReport('allCoursesOverviewReport');
 
   } else if (courseType === 'detail') {
     // Build detail for a specific course
@@ -1853,7 +2001,7 @@ document.getElementById('generateCourseReportBtn').addEventListener('click', () 
     document.getElementById('studentOverviewTable').innerHTML = '';
     document.getElementById('downloadStudentOverviewBtn').onclick = null;
 
-    show('courseDetailedReport');
+    showCourseReport('courseDetailedReport');
 
   } else if (courseType === 'fundae') {
      // Build detail + fundae for a specific course
@@ -1872,8 +2020,28 @@ document.getElementById('generateCourseReportBtn').addEventListener('click', () 
     document.getElementById('downloadStudentOverviewBtn').onclick = () =>
       downloadCSV(studentOverviewCsv, 'course-student-overview.csv');
 
-    show('courseDetailedReport');
+    showCourseReport('courseDetailedReport');
+
+  } else if (courseType === 'anpal') {
+    // ANPAL: like Fundae but with a custom class list (times + extra columns)
+    const { infoCsv, classListCsv } = buildCourseDetailReportANPAL(data, selectedCourseId);
+
+    document.getElementById('courseInfoTable').innerHTML = csvToTable(infoCsv);
+    document.getElementById('courseClassListTable').innerHTML = csvToTable(classListCsv);
+    document.getElementById('downloadCourseInfoBtn').onclick = () =>
+      downloadCSV(infoCsv, 'course-info.csv');
+    document.getElementById('downloadCourseClassListBtn').onclick = () =>
+      downloadCSV(classListCsv, 'course-classes-anpal.csv');
+
+    // Keep the student overview (same as FUNDAE)
+    const studentOverviewCsv = buildCourseStudentOverviewCSV(data, selectedCourseId);
+    document.getElementById('studentOverviewTable').innerHTML = csvToTable(studentOverviewCsv);
+    document.getElementById('downloadStudentOverviewBtn').onclick = () =>
+      downloadCSV(studentOverviewCsv, 'course-student-overview.csv');
+
+    showCourseReport('courseDetailedReport');
   }
+
 });
 
 
